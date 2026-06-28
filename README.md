@@ -102,8 +102,8 @@ Moqui database
       ├─ DeviceGroup / DeviceGroupMember
       ├─ DeviceRequest / DeviceRequestItem
       ├─ ParameterDef / Parameter / ParameterLog
-      ├─ DeviceConfigSet / DeviceConfig (recipe and batch-management definitions)
-      ├─ DeviceRuleSet / DeviceRule (recipe/configuration instantiation and application)
+      ├─ DeviceConfig (atomic recipe/configuration definition)
+      ├─ DeviceRuleSet / DeviceRule (batch-management, phased application, validation, export)
       └─ DeviceConnection
             ↓
 moqui-device-gateway
@@ -136,10 +136,9 @@ Camel routes = runtime execution
 | `ParameterDef` | Definition of a machine, process, telemetry, command, recipe, or configuration parameter. |
 | `Parameter` | Current value or state of a parameter. |
 | `ParameterLog` | Historical/inbound values written by telemetry routes. |
-| `DeviceConfigSet` | Group of device configurations, typically used to represent recipe and batch-management definitions. |
-| `DeviceConfig` | Machine-side configuration or recipe definition: a set of target values, limits, modes, or settings for a device/process. |
-| `DeviceRuleSet` | Rule/configuration set used to instantiate or apply a recipe/configuration to a specific device or production context. |
-| `DeviceRule` | Concrete rule or binding that connects a configured process/device behavior to runtime parameters and actions. |
+| `DeviceConfig` | Atomic machine-side recipe/configuration definition: target values, limits, modes, trajectories, or settings for one compatible device type. |
+| `DeviceRuleSet` | Root-scoped operational plan for one `Device`: production cycle, commissioning sequence, validation plan, or batch-style procedure. |
+| `DeviceRule` | Concrete phase/operation that applies, checks, asserts, suggests, or validates one `DeviceConfig` on one target `Device`. |
 | `DeviceConnection` | Optional transport connection details, especially useful for OPC UA and direct device links on fieldbus protocols. |
 | `DeviceConfig.approximatedFunctionId` | Optional FK to a `moqui-math` trajectory (`ApproximatedFunction`). When set, the config export generates `Trajectory.*` recipe entries in addition to the regular `Parameter` rows. |
 
@@ -217,7 +216,7 @@ The most important runtime settings are:
 
 | Variable / property | Required | Description |
 |---|---:|---|
-| `GATEWAY_DEVICE_ID` / `gateway.device.id` | Yes | `PhysicalDevice` ID of this gateway, for example `GW_EDGE_01`. |
+| `GATEWAY_DEVICE_ID` / `gateway.device.id` | Yes | `Device.deviceId` of this gateway, with a matching `PhysicalDevice` row, for example `GW_EDGE_01`. |
 | `QUARKUS_DATASOURCE_JDBC_URL` | Yes | JDBC URL of the Moqui database. |
 | `QUARKUS_DATASOURCE_USERNAME` | Yes | Database user. |
 | `QUARKUS_DATASOURCE_PASSWORD` | Yes | Database password. |

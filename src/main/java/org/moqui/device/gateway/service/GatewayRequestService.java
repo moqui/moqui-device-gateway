@@ -63,42 +63,66 @@ public class GatewayRequestService {
           AND (dgm.STATUS_ID IS NULL OR dgm.STATUS_ID = 'DgmsAlive')
         """;
     private static final String GATEWAY_DEVICE_SCOPE_COUNT_SQL = """
+        WITH RECURSIVE root_groups (DEVICE_ID) AS (
+            SELECT dgm.DEVICE_ID AS DEVICE_ID
+            FROM DEVICE_GROUP_MEMBER dgm
+            WHERE dgm.MEMBER_DEVICE_ID = ?
+              AND dgm.PURPOSE_ENUM_ID = 'DgmpEdgeGateway'
+              AND (dgm.STATUS_ID IS NULL OR dgm.STATUS_ID = 'DgmsAlive')
+        ), visible_devices (DEVICE_ID) AS (
+            SELECT rg.DEVICE_ID
+            FROM root_groups rg
+            UNION
+            SELECT dgm.MEMBER_DEVICE_ID AS DEVICE_ID
+            FROM DEVICE_GROUP_MEMBER dgm
+            JOIN root_groups rg ON rg.DEVICE_ID = dgm.DEVICE_ID
+            WHERE (dgm.STATUS_ID IS NULL OR dgm.STATUS_ID = 'DgmsAlive')
+            UNION
+            SELECT child.MEMBER_DEVICE_ID AS DEVICE_ID
+            FROM DEVICE_GROUP_MEMBER child
+            JOIN visible_devices vd ON vd.DEVICE_ID = child.DEVICE_ID
+            WHERE (child.STATUS_ID IS NULL OR child.STATUS_ID = 'DgmsAlive')
+        )
         SELECT COUNT(*) AS CNT
-        FROM DEVICE_GROUP_MEMBER gateway_member
-        JOIN DEVICE_GROUP_MEMBER target_member
-            ON target_member.DEVICE_ID = gateway_member.DEVICE_ID
-        WHERE gateway_member.MEMBER_DEVICE_ID = ?
-          AND gateway_member.PURPOSE_ENUM_ID = 'DgmpEdgeGateway'
-          AND (gateway_member.STATUS_ID IS NULL OR gateway_member.STATUS_ID = 'DgmsAlive')
-          AND target_member.MEMBER_DEVICE_ID = ?
-          AND (target_member.STATUS_ID IS NULL OR target_member.STATUS_ID = 'DgmsAlive')
+        FROM (SELECT DISTINCT DEVICE_ID FROM visible_devices) scoped
+        WHERE scoped.DEVICE_ID = ?
         """;
     private static final String STARTUP_SUBSCRIPTION_SQL = """
+        WITH RECURSIVE root_groups (DEVICE_ID) AS (
+            SELECT dgm.DEVICE_ID AS DEVICE_ID
+            FROM DEVICE_GROUP_MEMBER dgm
+            WHERE dgm.MEMBER_DEVICE_ID = ?
+              AND dgm.PURPOSE_ENUM_ID = 'DgmpEdgeGateway'
+              AND (dgm.STATUS_ID IS NULL OR dgm.STATUS_ID = 'DgmsAlive')
+        ), scoped_members (DEVICE_ID, MEMBER_DEVICE_ID, PURPOSE_ENUM_ID, STATUS_ID) AS (
+            SELECT dgm.DEVICE_ID, dgm.MEMBER_DEVICE_ID, dgm.PURPOSE_ENUM_ID, dgm.STATUS_ID
+            FROM DEVICE_GROUP_MEMBER dgm
+            JOIN root_groups rg ON rg.DEVICE_ID = dgm.DEVICE_ID
+            WHERE (dgm.STATUS_ID IS NULL OR dgm.STATUS_ID = 'DgmsAlive')
+            UNION
+            SELECT child.DEVICE_ID, child.MEMBER_DEVICE_ID, child.PURPOSE_ENUM_ID, child.STATUS_ID
+            FROM DEVICE_GROUP_MEMBER child
+            JOIN scoped_members sm ON sm.MEMBER_DEVICE_ID = child.DEVICE_ID
+            WHERE (child.STATUS_ID IS NULL OR child.STATUS_ID = 'DgmsAlive')
+        )
         SELECT startup.REQUEST_NAME
         FROM (
             SELECT DISTINCT
                 dr.REQUEST_NAME,
                 COALESCE(dr.PRIORITY, 999999) AS SORT_PRIORITY,
                 COALESCE(dr.SEQUENCE_NUM, 999999) AS SORT_SEQUENCE
-            FROM DEVICE_GROUP_MEMBER gateway_member
-            JOIN DEVICE_GROUP_MEMBER target_member
-                ON target_member.DEVICE_ID = gateway_member.DEVICE_ID
+            FROM scoped_members sm
             JOIN DEVICE_REQUEST dr
-                ON dr.DEVICE_ID = target_member.MEMBER_DEVICE_ID
-            WHERE gateway_member.MEMBER_DEVICE_ID = ?
-              AND gateway_member.PURPOSE_ENUM_ID = 'DgmpEdgeGateway'
-              AND (gateway_member.STATUS_ID IS NULL OR gateway_member.STATUS_ID = 'DgmsAlive')
-              AND target_member.MEMBER_DEVICE_ID <> gateway_member.MEMBER_DEVICE_ID
-              AND (target_member.STATUS_ID IS NULL OR target_member.STATUS_ID = 'DgmsAlive')
-              AND target_member.PURPOSE_ENUM_ID IN (
-                  'DgmpProcessPLC',
-                  'DgmpSafetyPLC',
-                  'DgmpController',
-                  'DgmpMotionController',
-                  'DgmpRemoteIO',
-                  'DgmpSafetyRemoteIO',
-                  'DgmpExtremeConditionRemoteIO'
-              )
+                ON dr.DEVICE_ID = sm.MEMBER_DEVICE_ID
+            WHERE sm.PURPOSE_ENUM_ID IN (
+                'DgmpProcessPLC',
+                'DgmpSafetyPLC',
+                'DgmpController',
+                'DgmpMotionController',
+                'DgmpRemoteIO',
+                'DgmpSafetyRemoteIO',
+                'DgmpExtremeConditionRemoteIO'
+            )
               AND dr.ROUTER_ENUM_ID = 'DrrMoquiDeviceGateway'
               AND dr.REQUEST_TYPE_ENUM_ID IN (
                   'DrtSubscribe',
