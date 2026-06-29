@@ -21,6 +21,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.camel.CamelContext;
+import org.apache.camel.Exchange;
 import org.apache.camel.ProducerTemplate;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.component.milo.MiloConstants;
@@ -285,7 +286,8 @@ public class GatewayRequestService {
         }
 
         if (mqttWriteAfterPublishEnabled) {
-            producer.sendBody(mqttWriteAfterPublishUri, Map.of("requestName", context.requestName()));
+            sendGatewayRequestCallback(mqttWriteAfterPublishUri, context, "writeCompleted",
+                "completed", "MQTT", "mqtt-write-device-request", context.items().size(), publishUriList, null);
         }
 
         return Map.of(
@@ -310,7 +312,8 @@ public class GatewayRequestService {
         }
 
         if (opcuaWriteAfterPublishEnabled) {
-            producer.sendBody(opcuaWriteAfterPublishUri, Map.of("requestName", context.requestName()));
+            sendGatewayRequestCallback(opcuaWriteAfterPublishUri, context, "writeCompleted",
+                "completed", "OPC UA", "opcua-write-device-request", context.items().size(), publishUriList, null);
         }
 
         return Map.of(
@@ -1194,6 +1197,35 @@ public class GatewayRequestService {
     private int extractRouteCount(Map<String, Object> result) {
         Object routeIdList = result.get("routeIdList");
         return routeIdList instanceof List<?> list ? list.size() : 0;
+    }
+
+    private void sendGatewayRequestCallback(
+        String callbackUri,
+        RequestContext context,
+        String eventType,
+        String status,
+        String protocol,
+        String routeId,
+        Integer rowCount,
+        List<String> publishUriList,
+        String message
+    ) {
+        if (callbackUri == null || callbackUri.isBlank()) return;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("eventType", eventType);
+        payload.put("requestName", context.requestName());
+        payload.put("deviceId", context.deviceId());
+        payload.put("status", status);
+        payload.put("protocol", protocol);
+        payload.put("routeId", routeId);
+        payload.put("rowCount", rowCount);
+        if (publishUriList != null && !publishUriList.isEmpty()) payload.put("publishUriList", publishUriList);
+        if (message != null && !message.isBlank()) payload.put("message", message);
+        try {
+            producer.sendBodyAndHeader(callbackUri, objectMapper.writeValueAsString(payload), Exchange.CONTENT_TYPE, "application/json");
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Unable to serialize gateway callback payload for request " + context.requestName(), e);
+        }
     }
 
     private void assertAtLeastOneRouteStarted(String requestName, List<String> routeIdList) {
