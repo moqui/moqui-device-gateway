@@ -17,6 +17,7 @@ import org.eclipse.paho.mqttv5.client.MqttClient;
 import org.eclipse.paho.mqttv5.client.MqttConnectionOptions;
 import org.eclipse.paho.mqttv5.common.MqttMessage;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -64,12 +65,28 @@ class PlcLogIngestIntegrationTest {
     // Lifecycle
     // -------------------------------------------------------------------------
 
+    @BeforeEach
+    void ensureLoggerDeviceExists() throws Exception {
+        try (Connection conn = dataSource.getConnection(); Statement st = conn.createStatement()) {
+            st.executeUpdate(
+                "INSERT INTO DEVICE (DEVICE_ID, DEVICE_TYPE_ENUM_ID) " +
+                "VALUES ('" + LOGGER_NAME + "', 'DtComputer') " +
+                "ON CONFLICT (DEVICE_ID) DO NOTHING");
+            st.executeUpdate(
+                "INSERT INTO PHYSICAL_DEVICE (DEVICE_ID, DEVICE_NAME) " +
+                "VALUES ('" + LOGGER_NAME + "', '" + LOGGER_NAME + "') " +
+                "ON CONFLICT (DEVICE_ID) DO NOTHING");
+        }
+    }
+
     @AfterEach
     void cleanup() throws Exception {
         try (Connection conn = dataSource.getConnection(); Statement st = conn.createStatement()) {
             st.executeUpdate("DELETE FROM PARAMETER_LOG WHERE PARAMETER_ID LIKE '" + LOGGER_NAME + ".%'");
             st.executeUpdate("DELETE FROM DEVICE_LOG    WHERE DEVICE_ID = '" + LOGGER_NAME + "'");
             st.executeUpdate("DELETE FROM PARAMETER     WHERE PARAMETER_ID LIKE '" + LOGGER_NAME + ".%'");
+            st.executeUpdate("DELETE FROM PHYSICAL_DEVICE WHERE DEVICE_ID = '" + LOGGER_NAME + "'");
+            st.executeUpdate("DELETE FROM DEVICE WHERE DEVICE_ID = '" + LOGGER_NAME + "'");
         }
     }
 

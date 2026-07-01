@@ -86,7 +86,7 @@ class OpcUaGatewayIntegrationTest {
     @Test
     @Order(1)
     void opcuaSubscribeIngestsLiveNodeUpdatesIntoParameterRows() throws Exception {
-        GatewayRequestService.RequestContext subscribeCtx = gatewayRequestService.loadRequestContext(seed("VPL_OPCUA_READ_REQ"));
+        GatewayRequestService.RequestContext subscribeCtx = gatewayRequestService.loadRequestContext(seed("TestPlcOpcUaReadReq"));
         @SuppressWarnings("unchecked")
         Map<String, Object> result = producer.requestBody(
             "direct:dispatch-device-request",
@@ -104,15 +104,15 @@ class OpcUaGatewayIntegrationTest {
             .atMost(Duration.ofSeconds(15))
             .pollInterval(Duration.ofMillis(500))
             .untilAsserted(() -> {
-                assertEquals(77.7, fetchParameterNumericValue(seed("VPL_PARAM_FEEDBACK")), 0.001);
-                assertEquals("Y", fetchParameterSymbolicValue(seed("VPL_PARAM_FAULT")));
+                assertEquals(77.7, fetchParameterNumericValue(seed("TestPlcFeedbackParam")), 0.001);
+                assertEquals("Y", fetchParameterSymbolicValue(seed("TestPlcFaultParam")));
             });
 
         Map<String, Object> unsubscribeResult = gatewayRequestService.unsubscribe(
-            gatewayRequestService.loadRequestContext(seed("VPL_OPCUA_UNSUB_REQ")));
+            gatewayRequestService.loadRequestContext(seed("TestPlcOpcUaUnsubscribeReq")));
 
         assertEquals("completed", unsubscribeResult.get("status"));
-        assertEquals(seed("VPL_OPCUA_READ_REQ"), unsubscribeResult.get("targetRequestName"));
+        assertEquals(seed("TestPlcOpcUaReadReq"), unsubscribeResult.get("targetRequestName"));
         assertTrue(((List<?>) unsubscribeResult.get("routeIdList")).size() >= 2);
     }
 
@@ -121,7 +121,7 @@ class OpcUaGatewayIntegrationTest {
     void opcuaOneShotReadFetchesCurrentNodeValueIntoParameter() throws Exception {
         miloTestServer.pushValue(FEEDBACK_ITEM_ID, 55.5);
 
-        GatewayRequestService.RequestContext readCtx = gatewayRequestService.loadRequestContext(seed("VPL_OPCUA_ONESHOT_REQ"));
+        GatewayRequestService.RequestContext readCtx = gatewayRequestService.loadRequestContext(seed("TestPlcOpcUaOneshotReq"));
         @SuppressWarnings("unchecked")
         Map<String, Object> result = producer.requestBody(
             "direct:dispatch-device-request",
@@ -131,15 +131,15 @@ class OpcUaGatewayIntegrationTest {
 
         assertEquals("completed", result.get("status"));
         assertEquals("opcua-read-device-request", result.get("routeId"));
-        assertEquals(55.5, fetchParameterNumericValue(seed("VPL_PARAM_FEEDBACK")), 0.001);
+        assertEquals(55.5, fetchParameterNumericValue(seed("TestPlcFeedbackParam")), 0.001);
     }
 
     @Test
     @Order(3)
     void opcuaWritePublishesCurrentParameterValueToServerNode() throws Exception {
-        updateParameterNumericValue(seed("VPL_PARAM_REFERENCE"), 88.8);
+        updateParameterNumericValue(seed("TestPlcReferenceParam"), 88.8);
 
-        GatewayRequestService.RequestContext writeCtx = gatewayRequestService.loadRequestContext(seed("VPL_OPCUA_WRITE_REQ"));
+        GatewayRequestService.RequestContext writeCtx = gatewayRequestService.loadRequestContext(seed("TestPlcOpcUaWriteReq"));
         @SuppressWarnings("unchecked")
         Map<String, Object> result = producer.requestBody(
             "direct:dispatch-device-request",
@@ -217,6 +217,14 @@ class OpcUaGatewayIntegrationTest {
             st.executeUpdate("DELETE FROM DEVICE_GROUP_MEMBER WHERE DEVICE_ID LIKE '" + suffixLike + "' OR MEMBER_DEVICE_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM PARAMETER WHERE PARAMETER_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM DEVICE_CONFIG WHERE DEVICE_CONFIG_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM TRAJECTORY_POINT WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM TRAJECTORY WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM PARAMETRIC_PATH_POINT WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM APPROXIMATED_FUNCTION_SAMPLE WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM PARAMETRIC_PATH WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM VECTOR_COMPONENT WHERE VECTOR_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM VECTOR WHERE VECTOR_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM APPROXIMATED_FUNCTION WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM PARAMETER_DEF WHERE PARAMETER_DEF_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM DEVICE_GROUP WHERE DEVICE_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM PHYSICAL_DEVICE WHERE DEVICE_ID LIKE '" + suffixLike + "'");
@@ -225,7 +233,7 @@ class OpcUaGatewayIntegrationTest {
     }
 
     private void removeDynamicRoutes() throws Exception {
-        String routePrefix = "device-request-consumer-" + seed("VPL_OPCUA_READ_REQ") + "-";
+        String routePrefix = "device-request-consumer-" + seed("TestPlcOpcUaReadReq") + "-";
         for (String routeId : camelContext.getRoutes().stream().map(route -> route.getId()).toList()) {
             if (routeId.startsWith(routePrefix)) {
                 camelContext.getRouteController().stopRoute(routeId);

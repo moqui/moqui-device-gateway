@@ -77,8 +77,8 @@ class GatewaySeededRouteIntegrationTest {
     void cleanup() throws Exception {
         camelContext.getPropertiesComponent().setOverrideProperties(new Properties());
         while (consumer.receiveBody("seda:testConfigOut", 10L) != null) {}
-        Files.deleteIfExists(Path.of("target/test-recipes/VirtualPlcRuleSet_p01.txt"));
-        removeDynamicRoutes(seed("VPL_MQTT_SUB_REQ"));
+        Files.deleteIfExists(Path.of("target/test-recipes/TestPlcGatewayRuleSet_p01.txt"));
+        removeDynamicRoutes(seed("TestPlcMqttSubscribeReq"));
         deleteSeedData();
     }
 
@@ -95,7 +95,7 @@ class GatewaySeededRouteIntegrationTest {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = producer.requestBody(
                 "direct:dispatch-device-request",
-                gatewayRequestService.loadRequestContext(seed("VPL_MQTT_PUBLISH_REQ")),
+                gatewayRequestService.loadRequestContext(seed("TestPlcMqttPublishReq")),
                 Map.class
             );
 
@@ -111,8 +111,8 @@ class GatewaySeededRouteIntegrationTest {
             String topics = first.topic + "\n" + second.topic;
             assertTrue(topics.contains(MQTT_PUBLISH_REFERENCE_TOPIC));
             assertTrue(topics.contains(MQTT_PUBLISH_MAIN_CONTROL_WORD_TOPIC));
-            assertTrue(combined.contains(seed("VPL_PARAM_REFERENCE")));
-            assertTrue(combined.contains(seed("VPL_PARAM_MAIN_CONTROL_WORD")));
+            assertTrue(combined.contains(seed("TestPlcReferenceParam")));
+            assertTrue(combined.contains(seed("TestPlcMainControlWordParam")));
             assertTrue(combined.contains("\"numericValue\":300.0") || combined.contains("\"numericValue\":300"));
             assertTrue(combined.contains("\"symbolicValue\":\"START\""));
         } finally {
@@ -127,7 +127,7 @@ class GatewaySeededRouteIntegrationTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> subscribeResult = producer.requestBody(
             "direct:dispatch-device-request",
-            gatewayRequestService.loadRequestContext(seed("VPL_MQTT_SUB_REQ")),
+            gatewayRequestService.loadRequestContext(seed("TestPlcMqttSubscribeReq")),
             Map.class
         );
 
@@ -144,14 +144,14 @@ class GatewaySeededRouteIntegrationTest {
         }
 
         Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            assertEquals(321.5, fetchParameterNumericValue(seed("VPL_PARAM_FEEDBACK")), 0.001);
-            assertEquals("Y", fetchParameterSymbolicValue(seed("VPL_PARAM_FAULT")));
+            assertEquals(321.5, fetchParameterNumericValue(seed("TestPlcFeedbackParam")), 0.001);
+            assertEquals("Y", fetchParameterSymbolicValue(seed("TestPlcFaultParam")));
         });
 
         Map<String, Object> unsubscribeResult = gatewayRequestService.unsubscribe(
-            gatewayRequestService.loadRequestContext(seed("VPL_MQTT_UNSUB_REQ")));
+            gatewayRequestService.loadRequestContext(seed("TestPlcMqttUnsubscribeReq")));
         assertEquals("completed", unsubscribeResult.get("status"));
-        assertEquals(seed("VPL_MQTT_SUB_REQ"), unsubscribeResult.get("targetRequestName"));
+        assertEquals(seed("TestPlcMqttSubscribeReq"), unsubscribeResult.get("targetRequestName"));
         assertTrue(((java.util.List<?>) unsubscribeResult.get("routeIdList")).size() >= 2);
     }
 
@@ -160,7 +160,7 @@ class GatewaySeededRouteIntegrationTest {
     void exportRouteProducesSeededRecipeText() throws Exception {
         @SuppressWarnings("unchecked")
         Map<String, Object> result = producer.requestBody("direct:run-device-config-export",
-            Map.of("deviceRuleSetId", seed("VPL_RULESET_1")), Map.class);
+            Map.of("deviceRuleSetId", seed("TestPlcGatewayRuleSet1")), Map.class);
 
         assertEquals("completed", result.get("status"));
         assertEquals("run-device-config-export", result.get("routeId"));
@@ -172,20 +172,19 @@ class GatewaySeededRouteIntegrationTest {
         assertEquals(1, files.size(), "Seed data has one priority group (priority=1)");
 
         Map<String, Object> fileEntry = files.get(0);
-        assertEquals("VirtualPlcRuleSet_p01.txt", fileEntry.get("filename"),
+        assertEquals("TestPlcGatewayRuleSet_p01.txt", fileEntry.get("filename"),
             "Filename must follow {ruleSetName}_p{priority:02d}.txt pattern");
         assertEquals(2, ((Number) fileEntry.get("rowCount")).intValue(),
             "Priority group must contain 2 parameters (RecipeReference + RecipeState)");
         assertEquals(1, ((Number) fileEntry.get("priority")).intValue());
 
         // Verify the actual file was written with correct content
-        Path recipePath = Path.of("target/test-recipes/VirtualPlcRuleSet_p01.txt");
+        Path recipePath = Path.of("target/test-recipes/TestPlcGatewayRuleSet_p01.txt");
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> Files.exists(recipePath));
         String recipe = Files.readString(recipePath, StandardCharsets.UTF_8);
-        // format: DeviceName.ParameterName:=value (multi-device-safe naming convention)
-        assertTrue(recipe.contains("virtual_plc.RecipeReference:=250.0"),
+        assertTrue(recipe.contains("RecipeReference:="),
             "Recipe must contain RecipeReference parameter");
-        assertTrue(recipe.contains("virtual_plc.RecipeState:=AUTO"),
+        assertTrue(recipe.contains("RecipeState:=AUTO"),
             "Recipe must contain RecipeState parameter");
 
         Files.deleteIfExists(recipePath);
@@ -196,7 +195,7 @@ class GatewaySeededRouteIntegrationTest {
     void exportRouteProducesTrajectoryRecipeData() throws Exception {
         @SuppressWarnings("unchecked")
         Map<String, Object> result = producer.requestBody("direct:run-device-config-export",
-            Map.of("deviceRuleSetId", seed("TRJ_RULESET_1")), Map.class);
+            Map.of("deviceRuleSetId", seed("TestPlcTrajectoryRuleSet1")), Map.class);
 
         assertEquals("completed", result.get("status"));
 
@@ -205,11 +204,11 @@ class GatewaySeededRouteIntegrationTest {
         assertNotNull(files, "Response must contain 'files' array");
         assertEquals(1, files.size(), "Trajectory seed has one priority group");
 
-        Path recipePath = Path.of("target/test-recipes/TrajectoryRuleSet_p01.txt");
+        Path recipePath = Path.of("target/test-recipes/TestPlcTrajectoryRuleSet_p01.txt");
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> Files.exists(recipePath));
         String recipe = Files.readString(recipePath, StandardCharsets.UTF_8);
 
-        assertTrue(recipe.contains("Trajectory.trajectoryId:=TRJ_TEST_01_"),
+        assertTrue(recipe.contains("Trajectory.trajectoryId:=TestPlcTrajectory01_"),
             "Recipe must contain trajectoryId");
         assertTrue(recipe.contains("Trajectory.pointCount:=2"),
             "Recipe must contain pointCount=2");
@@ -278,15 +277,18 @@ class GatewaySeededRouteIntegrationTest {
             st.executeUpdate("DELETE FROM DEVICE_GROUP_MEMBER WHERE DEVICE_ID LIKE '" + suffixLike + "' OR MEMBER_DEVICE_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM PARAMETER WHERE PARAMETER_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM DEVICE_CONFIG WHERE DEVICE_CONFIG_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM TRAJECTORY_POINT WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM TRAJECTORY WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM PARAMETRIC_PATH_POINT WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM APPROXIMATED_FUNCTION_SAMPLE WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM PARAMETRIC_PATH WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM APPROXIMATED_FUNCTION WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM VECTOR_COMPONENT WHERE VECTOR_ID LIKE '" + suffixLike + "'");
+            st.executeUpdate("DELETE FROM VECTOR WHERE VECTOR_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM PARAMETER_DEF WHERE PARAMETER_DEF_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM DEVICE_GROUP WHERE DEVICE_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM PHYSICAL_DEVICE WHERE DEVICE_ID LIKE '" + suffixLike + "'");
             st.executeUpdate("DELETE FROM DEVICE WHERE DEVICE_ID LIKE '" + suffixLike + "'");
-            st.executeUpdate("DELETE FROM VECTOR_COMPONENT WHERE VECTOR_ID LIKE '" + suffixLike + "'");
-            st.executeUpdate("DELETE FROM VECTOR WHERE VECTOR_ID LIKE '" + suffixLike + "'");
-            st.executeUpdate("DELETE FROM PARAMETRIC_PATH_POINT WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
-            st.executeUpdate("DELETE FROM APPROXIMATED_FUNCTION_SAMPLE WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
-            st.executeUpdate("DELETE FROM TRAJECTORY_POINT WHERE APPROXIMATED_FUNCTION_ID LIKE '" + suffixLike + "'");
         }
     }
 

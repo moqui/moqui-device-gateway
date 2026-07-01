@@ -7,8 +7,8 @@ import io.quarkus.test.junit.QuarkusTestProfile;
 /**
  * Fast/local Quarkus test profile with no external infrastructure.
  *
- * Uses in-memory H2 datasources for both the primary and named log datasource,
- * and disables broker-backed / PLC-backed consumers so tests stay hermetic.
+ * Uses isolated in-memory H2 datasources for transactional and log storage and
+ * disables broker-backed / PLC-backed consumers so tests stay hermetic.
  */
 public class LocalNoInfraTestProfile implements QuarkusTestProfile {
 

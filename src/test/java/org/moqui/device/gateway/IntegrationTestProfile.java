@@ -22,8 +22,11 @@ public class IntegrationTestProfile implements QuarkusTestProfile {
     @Override
     public Map<String, String> getConfigOverrides() {
         return Map.of(
+            "gateway.device.id", "GW_EDGE_01",
             "plc.log.route.autoStartup", "false",
             "mqtt.read.topic", "mqtt-read-device-request/parameter-log/in",
+            "quarkus.http.port", "0",
+            "quarkus.http.test-port", "0",
             "quarkus.datasource.jdbc.url", "jdbc:postgresql://localhost:5432/moqui",
             "quarkus.datasource.log.jdbc.url", "jdbc:postgresql://localhost:5432/moqui"
         );

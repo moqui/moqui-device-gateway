@@ -9,16 +9,14 @@ import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
 /**
- * Registers both Quarkus DataSources in the Camel registry:
- *  - {@code moquiDataSource} → default datasource (transactional Moqui DB: DEVICE_REQUEST, PARAMETER, DEVICE_CONFIG, …)
- *  - {@code moquiLogDataSource} → "log" named datasource (telemetry DB: PARAMETER_LOG, DEVICE_LOG)
+ * Registers Camel datasource aliases over the two Quarkus datasources used by the
+ * industrial stack:
+ *  - {@code moquiDataSource} → transactional PostgreSQL datasource
+ *  - {@code moquiLogDataSource} → telemetry/log datasource, typically TimescaleDB
  *
  * SQL route URIs reference one of these by name:
  *   sql:{{query}}?dataSource=#{{camel.sql.datasource}} (transactional DB)
  *   sql:{{query}}?dataSource=#{{camel.sql.log.datasource}} (log DB)
- *
- * Both datasources can point to the same DB during testing (standalone moqui-gateway-database).
- * In production, point the default to the main Moqui DB and "log" to the separate telemetry DB.
  *
  * We inject {@code AgroalDataSource} rather than plain {@code DataSource} to avoid CDI
  * ambiguity: a {@code @Produces @Named} method on plain {@code DataSource} would create a

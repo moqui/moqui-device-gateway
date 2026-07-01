@@ -220,7 +220,7 @@ The most important runtime settings are:
 | `QUARKUS_DATASOURCE_JDBC_URL` | Yes | JDBC URL of the Moqui database. |
 | `QUARKUS_DATASOURCE_USERNAME` | Yes | Database user. |
 | `QUARKUS_DATASOURCE_PASSWORD` | Yes | Database password. |
-| `QUARKUS_DATASOURCE_LOG_JDBC_URL` | Optional | Telemetry/log datasource. In small test setups it can point to the same DB. |
+| `QUARKUS_DATASOURCE_LOG_JDBC_URL` | Optional but recommended | JDBC URL of the telemetry/log datasource used for `PARAMETER_LOG`, `DEVICE_LOG`, and related observability tables. In production this is typically a TimescaleDB-backed PostgreSQL database separate from the transactional `moqui` DB. |
 | `GATEWAY_API_AUTH_TOKEN` | Required when API auth is enabled | REST API token. Do not use the default token in production. |
 | `QUARKUS_HTTP_PORT` | Optional | HTTP port, default `8081`. |
 
@@ -231,6 +231,7 @@ export GATEWAY_DEVICE_ID=GW_EDGE_01
 export QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://127.0.0.1:5432/moqui
 export QUARKUS_DATASOURCE_USERNAME=moqui
 export QUARKUS_DATASOURCE_PASSWORD=moqui
+export QUARKUS_DATASOURCE_LOG_JDBC_URL=jdbc:postgresql://127.0.0.1:5432/moqui-log
 export GATEWAY_API_AUTH_TOKEN='replace-with-a-real-secret'
 ```
 
@@ -240,7 +241,9 @@ export GATEWAY_API_AUTH_TOKEN='replace-with-a-real-secret'
 
 ## Local test seed data
 
-The SQL files under `src/test/resources` define a self-contained virtual industrial setup used by the local developer workflow and integration tests. All IDs use a `__SUFFIX__` placeholder; the Docker Compose file (`docker/postgres-compose.yml`) expands it to `01`, giving concrete IDs such as `GW_EDGE_01`, `VIRTUAL_PLC_01`, and `VPL_MQTT_SUB_REQ_01`.
+The SQL files under `src/test/resources` define a self-contained virtual industrial setup used by the local developer workflow and integration tests. All IDs use a `__SUFFIX__` placeholder; the Docker Compose file (`docker/postgres-compose.yml`) expands it to `01`, giving concrete IDs such as `GW_EDGE_01`, `VIRTUAL_PLC_01`, `DRV_EDGE_01`, and `DG_EDGE_01`. The canonical scenario is mirrored in Moqui XML seed data under `moqui-framework/runtime/component/moqui-device/data/DeviceTestData.xml`.
+
+The transactional model stays in the `moqui` database, while time-series and telemetry ingestion are intended for the `moqui-log` database. For lightweight integration checks the gateway test profile may still point both datasources to the same local PostgreSQL database, but the runtime configuration remains split and independently configurable.
 
 ### Devices and group
 

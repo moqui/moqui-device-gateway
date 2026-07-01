@@ -35,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class MqttInboundIntegrationTest {
+    private static final String TEST_PARAMETER_DEF_ID = "TestMqttInboundReferenceDef";
 
     // Artemis MQTT connection parameters for the standard local integration setup
     private static final String MQTT_BROKER    = "tcp://localhost:1883";
@@ -62,11 +63,20 @@ class MqttInboundIntegrationTest {
             PARAMETER_ID + "_TC04"
         );
         try (Connection conn = dataSource.getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "INSERT INTO PARAMETER_DEF " +
+                    "(PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME) " +
+                    "VALUES (?, 'PtNumberFloat', 'TestMqttInboundReference', 'Test MQTT Inbound Reference') " +
+                    "ON CONFLICT (PARAMETER_DEF_ID) DO NOTHING")) {
+                ps.setString(1, TEST_PARAMETER_DEF_ID);
+                ps.executeUpdate();
+            }
             for (String pid : testPids) {
                 try (PreparedStatement ps = conn.prepareStatement(
                         "INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID) " +
-                        "VALUES (?, 'Reference') ON CONFLICT DO NOTHING")) {
+                        "VALUES (?, ?) ON CONFLICT DO NOTHING")) {
                     ps.setString(1, pid);
+                    ps.setString(2, TEST_PARAMETER_DEF_ID);
                     ps.executeUpdate();
                 }
             }
@@ -87,6 +97,13 @@ class MqttInboundIntegrationTest {
                     ps.setString(1, pid);
                     ps.executeUpdate();
                 }
+            }
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM PARAMETER_DEF WHERE PARAMETER_DEF_ID = ? " +
+                    "AND NOT EXISTS (SELECT 1 FROM PARAMETER WHERE PARAMETER_DEF_ID = ?)")) {
+                ps.setString(1, TEST_PARAMETER_DEF_ID);
+                ps.setString(2, TEST_PARAMETER_DEF_ID);
+                ps.executeUpdate();
             }
         }
     }
