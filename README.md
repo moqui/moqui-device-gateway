@@ -809,6 +809,32 @@ curl -X POST \
 
 Use content transfer for file-like payloads such as recipes, device files, or other content that must be sent to a configured destination.
 
+The destination path is **not** taken from `DeviceContent.contentLocation`.
+That field is only the Moqui-side source location of the file to read.
+
+The effective transfer destination is the gateway-side `DeviceRequest.brokerUri`
+resolved by the `{requestName}` passed to:
+
+```text
+POST /api/device-content/transfer/{requestName}
+```
+
+The flow is:
+
+1. Moqui reads the file from `DeviceContent.contentLocation`
+2. Moqui sends `filename` + `contentBase64` to the gateway REST endpoint
+3. the gateway loads the gateway-side `DeviceRequest`
+4. the gateway writes the file to `DeviceRequest.brokerUri`
+
+Typical `brokerUri` examples for content transfer are:
+
+- `file:/mnt/cnc-share/programs`
+- `file:/var/lib/plc/recipes`
+- `sftp:operator@cnc1.factory.local:22/programs`
+
+This means the final file path or transfer endpoint used by **Transfer Content**
+is always the one declared in the gateway-side `DeviceRequest.brokerUri`.
+
 Example:
 
 ```bash
