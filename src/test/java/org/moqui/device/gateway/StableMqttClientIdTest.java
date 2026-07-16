@@ -71,7 +71,7 @@ class StableMqttClientIdTest {
             null,
             null,
             List.of(new GatewayRequestService.RequestItem(
-                "PARAM_1", 1, null, null, null, "plc/linea01/status"))
+                "PARAM_1", "status", 1, null, null, null, "plc/linea01/status"))
         );
 
         assertThrows(IllegalStateException.class, () -> gatewayRequestService.subscribeMqtt(context));

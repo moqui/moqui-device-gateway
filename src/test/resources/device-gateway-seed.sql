@@ -88,10 +88,10 @@ VALUES ('TestPlcFaultParam___SUFFIX__', 'TestPlcFaultDef___SUFFIX__', 'VIRTUAL_P
 
 INSERT INTO DEVICE_REQUEST (REQUEST_NAME, DEVICE_ID, REQUEST_TYPE_ENUM_ID, PURPOSE_ENUM_ID, ROUTER_ENUM_ID, BROKER_URI, ONLY_CHANGED_PARAMETERS)
 VALUES ('TestPlcMqttPublishReq___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'DrtWrite', 'DrpControl', 'DrrMoquiDeviceGateway', '__MQTT_PUBLISH_BASE_URI__', 'N');
-INSERT INTO DEVICE_REQUEST_ITEM (REQUEST_NAME, PARAMETER_ID, SEQUENCE_NUM, QUERY)
-VALUES ('TestPlcMqttPublishReq___SUFFIX__', 'TestPlcReferenceParam___SUFFIX__', 1, 'mqtt-write-device-request/virtual-plc/reference');
-INSERT INTO DEVICE_REQUEST_ITEM (REQUEST_NAME, PARAMETER_ID, SEQUENCE_NUM, QUERY)
-VALUES ('TestPlcMqttPublishReq___SUFFIX__', 'TestPlcMainControlWordParam___SUFFIX__', 2, 'mqtt-write-device-request/virtual-plc/main-control-word');
+INSERT INTO DEVICE_REQUEST_ITEM (REQUEST_NAME, PARAMETER_ID, REQUEST_ITEM_NAME, SEQUENCE_NUM, QUERY)
+VALUES ('TestPlcMqttPublishReq___SUFFIX__', 'TestPlcReferenceParam___SUFFIX__', 'reference', 1, 'mqtt-write-device-request/virtual-plc/reference');
+INSERT INTO DEVICE_REQUEST_ITEM (REQUEST_NAME, PARAMETER_ID, REQUEST_ITEM_NAME, SEQUENCE_NUM, QUERY)
+VALUES ('TestPlcMqttPublishReq___SUFFIX__', 'TestPlcMainControlWordParam___SUFFIX__', 'mainControlWord', 2, 'mqtt-write-device-request/virtual-plc/main-control-word');
 
 INSERT INTO DEVICE_REQUEST (REQUEST_NAME, DEVICE_ID, REQUEST_TYPE_ENUM_ID, PURPOSE_ENUM_ID, ROUTER_ENUM_ID, BROKER_URI, POLLING_INTERVAL)
 VALUES ('TestPlcMqttSubscribeReq___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'DrtCyclic', 'DrpControl', 'DrrMoquiDeviceGateway', '__MQTT_SUBSCRIBE_BASE_URI__', 100);

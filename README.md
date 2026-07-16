@@ -493,6 +493,22 @@ Prerequisites:
 - request items exist in `DeviceRequestItem`;
 - current values exist in `Parameter`.
 
+For an MQTT live-parameter request, each `DeviceRequestItem` uses:
+
+- `parameterId` to reference the existing, device-bound `Parameter` whose current value is published;
+- `requestItemName` as the application-specific JSON key consumed by the generated PLC mapper;
+- `query` as the item topic, when it overrides the request-level topic.
+
+The gateway publishes both the canonical fields and the mapper key. For example, an item with
+`parameterId = P_TEMP_SETPOINT`, `requestItemName = tempSetpoint`, and numeric value `22.5` produces:
+
+```json
+{"parameterId":"P_TEMP_SETPOINT","numericValue":22.5,"tempSetpoint":22.5}
+```
+
+The names `parameterId`, `numericValue`, `symbolicValue`, and `parameterEnumId` are reserved and
+cannot be used as `requestItemName` values.
+
 These examples use `mosquitto_sub` only as an MQTT client CLI tool. The broker used by the standard local setup is ActiveMQ Artemis.
 
 > **Order matters:** start `mosquitto_sub` before triggering the request, otherwise the messages are published before the subscription is open and nothing is received.

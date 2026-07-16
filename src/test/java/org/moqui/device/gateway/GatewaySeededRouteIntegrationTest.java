@@ -115,6 +115,8 @@ class GatewaySeededRouteIntegrationTest {
             assertTrue(combined.contains(seed("TestPlcMainControlWordParam")));
             assertTrue(combined.contains("\"numericValue\":300.0") || combined.contains("\"numericValue\":300"));
             assertTrue(combined.contains("\"symbolicValue\":\"START\""));
+            assertTrue(combined.contains("\"reference\":300.0") || combined.contains("\"reference\":300"));
+            assertTrue(combined.contains("\"mainControlWord\":\"START\""));
         } finally {
             subscriber.disconnectForcibly(0, 0, false);
             subscriber.close();

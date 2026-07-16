@@ -491,6 +491,7 @@ public class GatewayRequestService {
                 while (rs.next()) {
                     items.add(new RequestItem(
                         rs.getString("PARAMETER_ID"),
+                        rs.getString("REQUEST_ITEM_NAME"),
                         rs.getObject("SEQUENCE_NUM") != null ? rs.getInt("SEQUENCE_NUM") : null,
                         rs.getObject("NUMERIC_VALUE"),
                         rs.getString("SYMBOLIC_VALUE"),
@@ -945,6 +946,12 @@ public class GatewayRequestService {
         if (item.numericValue() != null) payload.put("numericValue", item.numericValue());
         if (item.symbolicValue() != null) payload.put("symbolicValue", item.symbolicValue());
         if (item.parameterEnumId() != null) payload.put("parameterEnumId", item.parameterEnumId());
+        if (item.requestItemName() != null && !item.requestItemName().isBlank()) {
+            if (Set.of("parameterId", "numericValue", "symbolicValue", "parameterEnumId").contains(item.requestItemName())) {
+                throw new IllegalArgumentException("MQTT requestItemName is reserved: " + item.requestItemName());
+            }
+            payload.put(item.requestItemName(), resolveOutboundValue(item));
+        }
         return payload;
     }
 
@@ -1289,6 +1296,7 @@ public class GatewayRequestService {
 
     public record RequestItem(
         String parameterId,
+        String requestItemName,
         Integer sequenceNum,
         Object numericValue,
         String symbolicValue,
