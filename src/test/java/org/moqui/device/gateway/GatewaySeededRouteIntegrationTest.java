@@ -184,10 +184,10 @@ class GatewaySeededRouteIntegrationTest {
         Path recipePath = Path.of("target/test-recipes/TestPlcGatewayRuleSet_p01.txt");
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> Files.exists(recipePath));
         String recipe = Files.readString(recipePath, StandardCharsets.UTF_8);
-        assertTrue(recipe.contains("RecipeReference:="),
-            "Recipe must contain RecipeReference parameter");
-        assertTrue(recipe.contains("RecipeState:=AUTO"),
-            "Recipe must contain RecipeState parameter");
+        assertTrue(recipe.contains("dev.RecipeReference:="),
+            "Recipe must project a PLC parameter into the dev namespace");
+        assertTrue(recipe.contains("dev.RecipeState:=AUTO"),
+            "Recipe must project PLC state into the dev namespace");
 
         Files.deleteIfExists(recipePath);
     }
