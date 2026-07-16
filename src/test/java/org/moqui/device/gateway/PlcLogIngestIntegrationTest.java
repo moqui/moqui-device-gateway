@@ -42,7 +42,7 @@ import jakarta.inject.Inject;
  *   docker compose -f ../moqui-framework/docker/activemq-compose.yml -p moqui-gateway up -d
  *
  * Run:
- *   ./gradlew test --tests '*PlcLogIngestIntegrationTest' -Dquarkus.profile=integration
+ *   ./gradlew integrationTest --tests '*PlcLogIngestIntegrationTest'
  */
 @QuarkusTest
 @TestProfile(PlcLogIngestTestProfile.class)
@@ -54,9 +54,11 @@ class PlcLogIngestIntegrationTest {
     private static final String MQTT_PASSWORD = "artemis";
     private static final String PLC_LOG_TOPIC = PlcLogIngestTestProfile.PLC_LOG_TOPIC;
 
-    // Unique logger name per test run so rows don't collide across parallel runs
-    private static final String TEST_RUN_ID  = UUID.randomUUID().toString().substring(0, 8);
-    private static final String LOGGER_NAME  = "hvac_" + TEST_RUN_ID;
+    // Exact model identifiers, unique per test run so rows do not collide.
+    private static final String TEST_RUN_ID     = UUID.randomUUID().toString().substring(0, 8);
+    private static final String LOGGER_NAME     = "PlcLogDevice_" + TEST_RUN_ID;
+    private static final String PARAMETER_DEF_ID = "PlcLogDef_" + TEST_RUN_ID;
+    private static final String PARAMETER_PREFIX = "PlcLogParam_" + TEST_RUN_ID + "_";
 
     @Inject
     AgroalDataSource dataSource;
@@ -76,15 +78,20 @@ class PlcLogIngestIntegrationTest {
                 "INSERT INTO PHYSICAL_DEVICE (DEVICE_ID, DEVICE_NAME) " +
                 "VALUES ('" + LOGGER_NAME + "', '" + LOGGER_NAME + "') " +
                 "ON CONFLICT (DEVICE_ID) DO NOTHING");
+            st.executeUpdate(
+                "INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME) " +
+                "VALUES ('" + PARAMETER_DEF_ID + "', 'PtNumberDecimal', '" + PARAMETER_DEF_ID + "', 'PLC log test') " +
+                "ON CONFLICT (PARAMETER_DEF_ID) DO NOTHING");
         }
     }
 
     @AfterEach
     void cleanup() throws Exception {
         try (Connection conn = dataSource.getConnection(); Statement st = conn.createStatement()) {
-            st.executeUpdate("DELETE FROM PARAMETER_LOG WHERE PARAMETER_ID LIKE '" + LOGGER_NAME + ".%'");
+            st.executeUpdate("DELETE FROM PARAMETER_LOG WHERE PARAMETER_ID LIKE '" + PARAMETER_PREFIX + "%'");
             st.executeUpdate("DELETE FROM DEVICE_LOG    WHERE DEVICE_ID = '" + LOGGER_NAME + "'");
-            st.executeUpdate("DELETE FROM PARAMETER     WHERE PARAMETER_ID LIKE '" + LOGGER_NAME + ".%'");
+            st.executeUpdate("DELETE FROM PARAMETER     WHERE PARAMETER_ID LIKE '" + PARAMETER_PREFIX + "%'");
+            st.executeUpdate("DELETE FROM PARAMETER_DEF WHERE PARAMETER_DEF_ID = '" + PARAMETER_DEF_ID + "'");
             st.executeUpdate("DELETE FROM PHYSICAL_DEVICE WHERE DEVICE_ID = '" + LOGGER_NAME + "'");
             st.executeUpdate("DELETE FROM DEVICE WHERE DEVICE_ID = '" + LOGGER_NAME + "'");
         }
@@ -109,6 +116,21 @@ class PlcLogIngestIntegrationTest {
         MqttMessage msg = new MqttMessage(payload.getBytes(StandardCharsets.UTF_8));
         msg.setQos(1);
         client.publish(PLC_LOG_TOPIC, msg);
+    }
+
+    private String parameterId(String name) {
+        return PARAMETER_PREFIX + name;
+    }
+
+    private void ensureParameter(String parameterId) throws Exception {
+        try (Connection conn = dataSource.getConnection(); PreparedStatement ps = conn.prepareStatement(
+                "INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_ID) VALUES (?, ?, ?) " +
+                "ON CONFLICT (PARAMETER_ID) DO NOTHING")) {
+            ps.setString(1, parameterId);
+            ps.setString(2, PARAMETER_DEF_ID);
+            ps.setString(3, LOGGER_NAME);
+            ps.executeUpdate();
+        }
     }
 
     private int countParameterLogRows(String parameterId) throws Exception {
@@ -164,19 +186,18 @@ class PlcLogIngestIntegrationTest {
      * TC-PLC-01: Source entry with numeric value → PARAMETER_LOG row with numericValue.
      *
      * The route must:
-     *   1. Ensure PlcLoggerDef PARAMETER_DEF row.
-     *   2. Ensure PARAMETER row for loggerName.source.
-     *   3. Insert into PARAMETER_LOG with numericValue.
+     * The source is the exact pre-existing Parameter.parameterId; the gateway
+     * must not concatenate loggerName or create a missing Parameter.
      */
     @Test
     @Order(1)
     void tc01_numericSourceEntryInsertsParameterLogWithNumericValue() throws Exception {
-        String source = "tempSensor";
-        String parameterId = LOGGER_NAME + "." + source;
+        String parameterId = parameterId("tempSensor");
+        ensureParameter(parameterId);
 
         MqttClient pub = mqttPublisher("plc-log-tc01-" + TEST_RUN_ID);
         try {
-            publish(pub, numericBatch(source, 21.5));
+            publish(pub, numericBatch(parameterId, 21.5));
         } finally {
             pub.disconnect(); pub.close();
         }
@@ -204,12 +225,12 @@ class PlcLogIngestIntegrationTest {
     @Test
     @Order(2)
     void tc02_textSourceEntryInsertsParameterLogWithSymbolicValue() throws Exception {
-        String source = "stateLogger";
-        String parameterId = LOGGER_NAME + "." + source;
+        String parameterId = parameterId("stateLogger");
+        ensureParameter(parameterId);
 
         MqttClient pub = mqttPublisher("plc-log-tc02-" + TEST_RUN_ID);
         try {
-            publish(pub, textBatch(source, "Standby state entered"));
+            publish(pub, textBatch(parameterId, "Standby state entered"));
         } finally {
             pub.disconnect(); pub.close();
         }
@@ -271,12 +292,12 @@ class PlcLogIngestIntegrationTest {
     @Test
     @Order(4)
     void tc04_mixedBatchRoutesSourceEntriesToParameterLogAndNoSourceToDeviceLog() throws Exception {
-        String source = "rhSensor";
-        String parameterId = LOGGER_NAME + "." + source;
+        String parameterId = parameterId("rhSensor");
+        ensureParameter(parameterId);
 
         String mixedBatch =
             "{\"1\":{\"logEventDate\":\"DT#2026-05-25-10:00:03\","
-            + "\"loggerName\":\"" + LOGGER_NAME + "\",\"source\":\"" + source + "\","
+            + "\"loggerName\":\"" + LOGGER_NAME + "\",\"source\":\"" + parameterId + "\","
             + "\"type\":1,\"repeatCount\":1,\"numericValue\":72.0},"
             + "\"2\":{\"logEventDate\":\"DT#2026-05-25-10:00:03\","
             + "\"loggerName\":\"" + LOGGER_NAME + "\",\"source\":\"\","
@@ -307,12 +328,12 @@ class PlcLogIngestIntegrationTest {
     @Test
     @Order(5)
     void tc05_dtHashTimestampIsParsedIntoObservedDate() throws Exception {
-        String source = "clock";
-        String parameterId = LOGGER_NAME + "." + source;
+        String parameterId = parameterId("clock");
+        ensureParameter(parameterId);
 
         String batch =
             "{\"1\":{\"logEventDate\":\"DT#2026-01-15-08:30:00\","
-            + "\"loggerName\":\"" + LOGGER_NAME + "\",\"source\":\"" + source + "\","
+            + "\"loggerName\":\"" + LOGGER_NAME + "\",\"source\":\"" + parameterId + "\","
             + "\"type\":1,\"repeatCount\":1,\"numericValue\":55.0}}";
 
         MqttClient pub = mqttPublisher("plc-log-tc05-" + TEST_RUN_ID);
@@ -362,11 +383,11 @@ class PlcLogIngestIntegrationTest {
         Thread.sleep(500);
 
         // Publish a valid message after the bad one; it must still be processed
-        String source = "afterBad";
-        String parameterId = LOGGER_NAME + "." + source;
+        String parameterId = parameterId("afterBad");
+        ensureParameter(parameterId);
         MqttClient pub2 = mqttPublisher("plc-log-tc06b-" + TEST_RUN_ID);
         try {
-            publish(pub2, numericBatch(source, 1.0));
+            publish(pub2, numericBatch(parameterId, 1.0));
         } finally {
             pub2.disconnect(); pub2.close();
         }

@@ -614,15 +614,15 @@ The PLC publishes a **numbered-object** JSON batch. Each top-level key is a sequ
 {
   "1": {
     "logEventDate": "DT#2026-05-25-10:00:00",
-    "loggerName":   "hvac_controller",
-    "source":       "tempSensor",
+    "loggerName":   "HVAC_DEMO_PLC",
+    "source":       "HvacTempFeedback",
     "type":         1,
     "repeatCount":  1,
     "numericValue": 21.5
   },
   "2": {
     "logEventDate": "DT#2026-05-25-10:00:01",
-    "loggerName":   "hvac_controller",
+    "loggerName":   "HVAC_DEMO_PLC",
     "source":       "",
     "type":         0,
     "repeatCount":  1,
@@ -634,8 +634,8 @@ The PLC publishes a **numbered-object** JSON batch. Each top-level key is a sequ
 | Field | Description |
 |---|---|
 | `logEventDate` | IEC 61131-3 `DT#YYYY-MM-DD-HH:MM:SS` timestamp |
-| `loggerName` | Logger identifier; used as `deviceId` in `DEVICE_LOG` and as the `parameterId` prefix in `PARAMETER_LOG` |
-| `source` | Data source or sensor name within the logger; empty string means a device-level message with no associated parameter |
+| `loggerName` | Exact, pre-existing `Device.deviceId` owning the event |
+| `source` | Exact, pre-existing `Parameter.parameterId`; empty string means a device-level event |
 | `type` | `1` = numeric value, `0` = text / symbolic message |
 | `numericValue` | (type 1 only) the numeric measurement |
 | `message` | (type 0 only) the text message |
@@ -645,10 +645,13 @@ The PLC publishes a **numbered-object** JSON batch. Each top-level key is a sequ
 
 | `source` field | Route destination | Key used |
 |---|---|---|
-| Non-empty (e.g. `"tempSensor"`) | `PARAMETER_LOG` | `parameterId = {loggerName}.{source}` |
+| Non-empty (e.g. `"HvacTempFeedback"`) | `PARAMETER_LOG` | `parameterId = source` |
 | Empty (`""`) | `DEVICE_LOG` | `deviceId = loggerName` |
 
-The route auto-creates `ParameterDef` and `Parameter` rows for each `loggerName.source` pair before writing to `PARAMETER_LOG`.
+Payload type is independent from scope: both device- and parameter-level events
+may be numeric, textual, or enumerated. The route does not concatenate fields
+and does not auto-create `ParameterDef` or `Parameter` rows. Missing or invalid
+IDs are rejected by the authoritative Moqui database model.
 
 #### Test with mosquitto_pub
 

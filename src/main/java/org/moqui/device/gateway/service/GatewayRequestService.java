@@ -564,13 +564,21 @@ public class GatewayRequestService {
             if (!(entryObject instanceof Map<?, ?> entryMapRaw)) continue;
             Map<String, Object> entry = castMap(entryMapRaw);
             Timestamp observedDate = parsePlcTimestamp(sdf, Objects.toString(entry.get("logEventDate"), ""));
-            String loggerName = Objects.toString(entry.getOrDefault("loggerName", "plc-log-unknown"));
-            String source = Objects.toString(entry.getOrDefault("source", ""));
+            String loggerName = Objects.toString(entry.getOrDefault("loggerName", "")).trim();
+            String source = Objects.toString(entry.getOrDefault("source", "")).trim();
             Integer type = entry.get("type") instanceof Number n ? n.intValue() : null;
+
+            if (loggerName.isBlank()) {
+                throw new IllegalArgumentException("PLC log entry is missing loggerName/deviceId");
+            }
 
             if (!source.isBlank()) {
                 Map<String, Object> parameterRow = new LinkedHashMap<>();
-                parameterRow.put("parameterId", loggerName + "." + source);
+                // LoggerFacade contract: loggerName is Device.deviceId and source is
+                // the exact Parameter.parameterId. Never infer persistent identity
+                // by concatenating diagnostic fields.
+                parameterRow.put("parameterId", source);
+                parameterRow.put("deviceId", loggerName);
                 parameterRow.put("observedDate", observedDate);
                 parameterRow.put("numericValue", Integer.valueOf(1).equals(type) ? entry.get("numericValue") : null);
                 parameterRow.put("symbolicValue", Integer.valueOf(2).equals(type)
@@ -593,17 +601,6 @@ public class GatewayRequestService {
         }
 
         return new PlcLogBatch(List.copyOf(withSource), List.copyOf(withoutSource));
-    }
-
-    public List<Map<String, Object>> uniqueParameterRefs(List<Map<String, Object>> rows) {
-        LinkedHashMap<String, Map<String, Object>> uniqueRows = new LinkedHashMap<>();
-        for (Map<String, Object> row : rows) {
-            String parameterId = Objects.toString(row.get("parameterId"), null);
-            if (parameterId != null && !parameterId.isBlank()) {
-                uniqueRows.putIfAbsent(parameterId, Map.of("parameterId", parameterId));
-            }
-        }
-        return new ArrayList<>(uniqueRows.values());
     }
 
     public List<Map<String, Object>> unwrapSqlRowList(Object body) {

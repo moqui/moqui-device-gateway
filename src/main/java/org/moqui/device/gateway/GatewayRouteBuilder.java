@@ -180,21 +180,6 @@ public class GatewayRouteBuilder extends RouteBuilder {
 
         from("direct:plc-log-ingest-with-source")
             .routeId("plc-log-ingest-with-source")
-            .setBody().constant(Map.of())
-            .doTry()
-                .toD("{{plc.log.store.ensure.parameter.def.uri}}")
-            .doCatch(Exception.class)
-                .log(LoggingLevel.WARN, "Could not ensure PlcLoggerDef ParameterDef: ${exception.message}")
-            .end()
-            .process(exchange -> exchange.getMessage().setBody(
-                gatewayRequestService.uniqueParameterRefs(propertyRows(exchange, "plcLogWithSource"))))
-            .doTry()
-                .toD("{{plc.log.store.ensure.parameter.uri}}")
-            .doCatch(Exception.class)
-                .log(LoggingLevel.WARN,
-                    "Discarding MQTT-PLC-LOG (source) after PARAMETER upsert failure: ${exception.message}")
-                .process(inboundErrorNotifier::recordError)
-            .end()
             .process(exchange -> exchange.getMessage().setBody(exchange.getProperty("plcLogWithSource")))
             .setProperty("protocolLabel").constant("MQTT-PLC-LOG")
             .setProperty("storeLogUri").simple("{{mqtt.read.store.log.uri}}")

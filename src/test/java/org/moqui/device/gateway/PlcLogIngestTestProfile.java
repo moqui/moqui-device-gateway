@@ -11,7 +11,7 @@ import java.util.Map;
  * The main MQTT read route is disabled to avoid interference.
  *
  * Prerequisite: same infrastructure as IntegrationTestProfile.
- * Run: ./gradlew test --tests '*PlcLogIngestIntegrationTest' -Dquarkus.profile=integration
+ * Run: ./gradlew integrationTest --tests '*PlcLogIngestIntegrationTest'
  */
 public class PlcLogIngestTestProfile extends IntegrationTestProfile {
 
