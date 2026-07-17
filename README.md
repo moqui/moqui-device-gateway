@@ -346,6 +346,15 @@ Tests are excluded from the `build` task so that the artifact can be built indep
 
 Fast tests run without the full Moqui runtime and without external MQTT/OPC UA infrastructure. They are excluded from the `build` task above and must be run explicitly.
 
+Stop a `quarkusDev` instance started from the same checkout before running
+`clean`, because the development process keeps `build/moqui-device-gateway-dev.jar`
+open. To leave a separately built gateway running while executing the fast
+tests, assign a dynamic test HTTP port:
+
+```bash
+QUARKUS_HTTP_TEST_PORT=0 ./gradlew test
+```
+
 > **Note:** Camel logs one expected `ERROR` line ("Failed delivery... Inbound payload must be a Map or List of Map rows") during the `malformedInboundPayloadIsDiscardedWithoutStoppingConsumerRoute` test. This is intentional — the test verifies that a malformed payload is rejected without stopping the consumer route.
 
 ### 3. Start local PostgreSQL
@@ -656,6 +665,10 @@ IDs are rejected by the authoritative Moqui database model.
 #### Test with mosquitto_pub
 
 The `local` profile starts the `plc-log-consumer` route automatically on `moqui-plc`.
+The commands below assume that `moqui-device/data/HVACDemoData.xml` has been
+loaded into the Moqui database. `HVAC_DEMO_PLC` and `HvacTempFeedback` are
+therefore real, related model identifiers; replace both with existing IDs from
+your own project when testing another Application.
 
 Publish a numeric entry:
 
@@ -663,14 +676,14 @@ Publish a numeric entry:
 mosquitto_pub -h 127.0.0.1 -p 1883 \
   -u artemis -P artemis \
   -t 'moqui-plc' \
-  -m '{"1":{"logEventDate":"DT#2026-05-25-10:00:00","loggerName":"hvac_controller","source":"tempSensor","type":1,"repeatCount":1,"numericValue":21.5}}'
+  -m '{"1":{"logEventDate":"DT#2026-05-25-10:00:00","loggerName":"HVAC_DEMO_PLC","source":"HvacTempFeedback","type":1,"repeatCount":1,"numericValue":21.5}}'
 ```
 
 Verify `PARAMETER_LOG`:
 
 ```bash
 PGPASSWORD=moqui psql -h 127.0.0.1 -p 5432 -U moqui -d moqui \
-  -c "SELECT parameter_id, numeric_value, observed_date FROM PARAMETER_LOG WHERE parameter_id LIKE 'hvac_controller.%' ORDER BY observed_date DESC LIMIT 5;"
+  -c "SELECT parameter_id, numeric_value, observed_date FROM PARAMETER_LOG WHERE parameter_id = 'HvacTempFeedback' ORDER BY observed_date DESC LIMIT 5;"
 ```
 
 Publish a device-level (no-source) entry:
@@ -679,14 +692,14 @@ Publish a device-level (no-source) entry:
 mosquitto_pub -h 127.0.0.1 -p 1883 \
   -u artemis -P artemis \
   -t 'moqui-plc' \
-  -m '{"1":{"logEventDate":"DT#2026-05-25-10:00:01","loggerName":"hvac_controller","source":"","type":0,"repeatCount":1,"message":"Framework started."}}'
+  -m '{"1":{"logEventDate":"DT#2026-05-25-10:00:01","loggerName":"HVAC_DEMO_PLC","source":"","type":0,"repeatCount":1,"message":"Framework started."}}'
 ```
 
 Verify `DEVICE_LOG`:
 
 ```bash
 PGPASSWORD=moqui psql -h 127.0.0.1 -p 5432 -U moqui -d moqui \
-  -c "SELECT device_id, payload, observed_date FROM DEVICE_LOG WHERE device_id = 'hvac_controller' ORDER BY observed_date DESC LIMIT 5;"
+  -c "SELECT device_id, payload, observed_date FROM DEVICE_LOG WHERE device_id = 'HVAC_DEMO_PLC' ORDER BY observed_date DESC LIMIT 5;"
 ```
 
 ### Scenario D — OPC UA
@@ -946,6 +959,8 @@ These tests should not require a complete Moqui runtime.
 ### Integration tests
 
 Integration tests require external services such as PostgreSQL, MQTT broker, and OPC UA test infrastructure.
+Run them only against development/test databases: the tests create temporary,
+uniquely suffixed model records and remove them after each scenario.
 
 The standard local MQTT broker for integration tests is ActiveMQ Artemis from:
 
@@ -956,6 +971,9 @@ docker compose -f ../moqui-framework/docker/activemq-compose.yml -p moqui-gatewa
 Run examples:
 
 ```bash
+./gradlew integrationTest
+
+# Or select one integration scenario:
 ./gradlew integrationTest --tests '*MqttInboundIntegrationTest' -Dquarkus.profile=integration
 ./gradlew integrationTest --tests '*GatewaySeededRouteIntegrationTest' -Dquarkus.profile=integration
 ./gradlew integrationTest --tests '*OpcUaGatewayIntegrationTest' -Dquarkus.profile=integration

@@ -13,7 +13,7 @@ set -euo pipefail
 # with credentials:
 #   artemis / artemis
 
-./gradlew test --tests '*MqttInboundIntegrationTest' -Dquarkus.profile=integration
-./gradlew test --tests '*GatewaySeededRouteIntegrationTest' -Dquarkus.profile=integration
-./gradlew test --tests '*OpcUaGatewayIntegrationTest' -Dquarkus.profile=integration
-./gradlew test --tests '*PlcLogIngestIntegrationTest' -Dquarkus.profile=integration
+./gradlew integrationTest --tests '*MqttInboundIntegrationTest' -Dquarkus.profile=integration
+./gradlew integrationTest --tests '*GatewaySeededRouteIntegrationTest' -Dquarkus.profile=integration
+./gradlew integrationTest --tests '*OpcUaGatewayIntegrationTest' -Dquarkus.profile=integration
+./gradlew integrationTest --tests '*PlcLogIngestIntegrationTest' -Dquarkus.profile=integration
