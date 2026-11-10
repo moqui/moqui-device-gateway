@@ -11,82 +11,67 @@
  * along with this software (see the LICENSE.md file). If not, see
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
-
-//! The registry of connections and subscriptions: the factory owns the I/O runtime, the protocol clients with their
-//! sessions and the active subscriptions (through DeviceGatewayFacade), and a bounded persistence queue.
-use crate::{
-    client::{DeviceGatewayFacade, SampleSink},
-    model::*,
-};
+//! The ToolFactory of the `moqui` feature: one [`DeviceGatewayFacade`] and the Tokio runtime its backends run on, for
+//! the services of moqui-device. It holds no service, entity or persistence logic. A host without Moqui creates the
+//! facade and a runtime itself.
+use crate::client::DeviceGatewayFacade;
 use moqui_core::{
     context::{Error, ExecutionContextFactory},
     native::{Tool, ToolFactory},
 };
 use moqui_lib::object::Value;
 use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex, Weak,
-    },
-    thread::JoinHandle,
-    time::Duration,
+    future::Future,
+    sync::{Arc, Mutex},
 };
-#[derive(Default)]
-pub struct DeviceGatewayToolFactory {
-    state: Mutex<Option<Arc<State>>>,
+
+/// The facade and its I/O runtime.
+pub struct Gateway {
+    runtime: tokio::runtime::Runtime,
+    facade: Arc<DeviceGatewayFacade>,
 }
-pub(crate) struct State {
-    pub runtime: tokio::runtime::Runtime,
-    pub facade: Arc<DeviceGatewayFacade>,
-    pub sink: Arc<QueueSink>,
-    stop: Arc<AtomicBool>,
-    worker: Mutex<Option<JoinHandle<()>>>,
-    /// Set by the first start#Subscriptions of this process, so the subscriptions are restored once per start.
-    pub startup_claimed: AtomicBool,
-}
-pub(crate) struct QueueSink {
-    sender: mpsc::SyncSender<SampleBatch>,
-}
-impl SampleSink for QueueSink {
-    fn emit(&self, batch: SampleBatch) -> Result<(), DeviceGatewayError> {
-        self.sender.try_send(batch).map_err(|e| match e {
-            mpsc::TrySendError::Full(_) => DeviceGatewayError::new(
-                ErrorKind::Busy,
-                "Device gateway persistence queue is full; sample was not saved",
-            ),
-            mpsc::TrySendError::Disconnected(_) => {
-                DeviceGatewayError::new(ErrorKind::Closed, "Device gateway persistence worker is closed")
-            }
-        })
+impl Gateway {
+    pub fn facade(&self) -> &Arc<DeviceGatewayFacade> {
+        &self.facade
+    }
+    /// Runs a facade call from a thread outside the runtime, such as a service worker.
+    pub fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.runtime.block_on(future)
+    }
+    pub fn handle(&self) -> tokio::runtime::Handle {
+        self.runtime.handle().clone()
     }
 }
+
+#[derive(Default)]
+pub struct DeviceGatewayToolFactory {
+    gateway: Mutex<Option<Arc<Gateway>>>,
+}
 impl DeviceGatewayToolFactory {
-    pub(crate) fn state(&self) -> Result<Arc<State>, Error> {
-        self.state
+    /// The facade and runtime of this factory, once initialized.
+    pub fn gateway(&self) -> Result<Arc<Gateway>, Error> {
+        self.gateway
             .lock()
             .map_err(|_| Error::new("Device gateway factory lock poisoned"))?
             .clone()
             .ok_or_else(|| Error::new("Device gateway factory is not initialized"))
     }
-    /// Resolve once during setup. The returned API needs no ExecutionContext.
     pub fn facade(&self) -> Result<Arc<DeviceGatewayFacade>, Error> {
-        Ok(self.state()?.facade.clone())
+        Ok(self.gateway()?.facade.clone())
     }
 }
-struct DeviceGatewayTool {
-    pub _facade: Arc<DeviceGatewayFacade>,
-}
+struct DeviceGatewayTool;
 impl Tool for DeviceGatewayTool {}
 impl ToolFactory for DeviceGatewayToolFactory {
     fn name(&self) -> &str {
         "DeviceGateway"
     }
-    fn init(&self, factory: &Arc<ExecutionContextFactory>) -> Result<(), Error> {
-        let mut state = self
-            .state
+    fn init(&self, _: &Arc<ExecutionContextFactory>) -> Result<(), Error> {
+        let mut gateway = self
+            .gateway
             .lock()
             .map_err(|_| Error::new("Device gateway factory lock poisoned"))?;
-        if state.is_some() {
+        if gateway.is_some() {
             return Ok(());
         }
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -95,85 +80,25 @@ impl ToolFactory for DeviceGatewayToolFactory {
             .thread_name("device-gateway-io")
             .build()
             .map_err(|e| Error::new(e.to_string()))?;
-        let (sender, receiver) = mpsc::sync_channel::<SampleBatch>(1024);
-        let stop = Arc::new(AtomicBool::new(false));
-        let stopped = stop.clone();
-        let factory = Arc::downgrade(factory);
-        let worker = std::thread::Builder::new()
-            .name("device-gateway-store".into())
-            .spawn(move || persist_loop(factory, receiver, stopped))
-            .map_err(|e| Error::new(e.to_string()))?;
-        *state = Some(Arc::new(State {
+        *gateway = Some(Arc::new(Gateway {
             runtime,
             facade: Arc::new(DeviceGatewayFacade::new()),
-            sink: Arc::new(QueueSink { sender }),
-            stop,
-            worker: Mutex::new(Some(worker)),
-            startup_claimed: AtomicBool::new(false),
         }));
         Ok(())
     }
     fn get_instance(&self, _: &[Value]) -> Result<Arc<dyn Tool>, Error> {
-        Ok(Arc::new(DeviceGatewayTool {
-            _facade: self.facade()?,
-        }))
+        self.gateway()?;
+        Ok(Arc::new(DeviceGatewayTool))
     }
+    /// Closes the connections and ends the subscriptions; a durable broker session keeps collecting until the next
+    /// start.
     fn destroy(&self) {
-        let state = self.state.lock().ok().and_then(|mut s| s.take());
-        if let Some(state) = state {
-            state.runtime.block_on(state.facade.close());
-            state.stop.store(true, Ordering::Release);
-            let worker = state.worker.lock().ok().and_then(|mut w| w.take());
-            if worker.is_some_and(|w| w.join().is_err()) {
-                tracing::error!("Device gateway persistence worker panicked");
+        let gateway = self.gateway.lock().ok().and_then(|mut g| g.take());
+        if let Some(gateway) = gateway {
+            gateway.runtime.block_on(gateway.facade.close());
+            if let Ok(gateway) = Arc::try_unwrap(gateway) {
+                gateway.runtime.shutdown_background();
             }
-        }
-    }
-}
-/// Persistence failure notices: `device_gateway_error_notification=false` turns them off, and
-/// `device_gateway_error_notification_seconds` (default 60) is how long the failures of a request last before the
-/// user is told.
-fn inbound_errors() -> Option<crate::notifier::InboundErrors> {
-    if moqui_lib::env::get_prop_or_env("device_gateway_error_notification") == "false" {
-        return None;
-    }
-    let seconds = moqui_lib::env::get_prop_or_env("device_gateway_error_notification_seconds")
-        .parse::<u64>()
-        .unwrap_or(60);
-    Some(crate::notifier::InboundErrors::new(Duration::from_secs(seconds)))
-}
-fn persist_loop(factory: Weak<ExecutionContextFactory>, receiver: mpsc::Receiver<SampleBatch>, stop: Arc<AtomicBool>) {
-    let mut errors = inbound_errors();
-    loop {
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(batch) => {
-                let Some(factory) = factory.upgrade() else {
-                    break;
-                };
-                let ec = factory.new_context();
-                let _entered = ec.enter();
-                let _auth = ec.disable_authz();
-                let stored = crate::binding::store_batch(&ec, &batch);
-                if let Err(error) = &stored {
-                    tracing::error!(request=%batch.request_name,error=%error,"Device gateway samples were not saved");
-                }
-                if let Some(errors) = errors.as_mut() {
-                    let now = std::time::Instant::now();
-                    let notice = match &stored {
-                        Ok(()) => errors.clear(&batch.request_name, now),
-                        Err(_) => errors.record_error(&batch.request_name, now),
-                    };
-                    if let Some(notice) = notice {
-                        let message = stored.as_ref().err().map(|e| e.to_string());
-                        if let Err(error) = crate::binding::notify_inbound(&ec, &batch, &notice, message) {
-                            tracing::error!(request=%batch.request_name,error=%error,"Persistence notice not sent");
-                        }
-                    }
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) if stop.load(Ordering::Acquire) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 }

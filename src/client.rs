@@ -12,8 +12,8 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
+pub use crate::device_facade::{DeviceFacade, Receipt, SampleSink};
 use crate::model::*;
-use async_trait::async_trait;
 use std::{
     collections::HashMap,
     sync::{
@@ -25,40 +25,13 @@ use std::{
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-pub trait SampleSink: Send + Sync {
-    /// Must not block a protocol callback. A full queue is an observable failure.
-    fn emit(&self, batch: SampleBatch) -> Result<(), DeviceGatewayError>;
-}
-#[async_trait]
-pub trait DeviceClient: Send + Sync {
-    fn capabilities(&self) -> Capabilities;
-    async fn execute(
-        &self,
-        request: &PreparedDeviceRequest,
-        input: &RequestInput,
-        output: &mut RequestOutput,
-        deadline: Instant,
-    ) -> Result<(), DeviceGatewayError>;
-    async fn subscribe(
-        &self,
-        _request: Arc<PreparedDeviceRequest>,
-        _sink: Arc<dyn SampleSink>,
-        _cancel: CancellationToken,
-        _deadline: Instant,
-    ) -> Result<tokio::task::JoinHandle<()>, DeviceGatewayError> {
-        Err(DeviceGatewayError::unsupported(
-            "This backend has no event subscription",
-        ))
-    }
-    async fn close(&self) {}
-}
 struct Subscription {
     cancel: CancellationToken,
     task: tokio::task::JoinHandle<()>,
     request: Arc<PreparedDeviceRequest>,
 }
 pub struct DeviceGatewayFacade {
-    clients: HashMap<ProtocolKey, Arc<dyn DeviceClient>>,
+    clients: HashMap<ProtocolKey, Arc<dyn DeviceFacade>>,
     subscriptions: Mutex<HashMap<String, Subscription>>,
     lifecycle: Mutex<()>,
     closed: AtomicBool,
@@ -89,18 +62,18 @@ impl DeviceGatewayFacade {
             Arc::new(crate::backends::modbus::ModbusDeviceClient::default()),
         );
         #[cfg(feature = "mqtt")]
-        facade.install(Protocol::Mqtt, Arc::new(crate::backends::mqtt::MqttDeviceClient));
+        facade.install(
+            Protocol::Mqtt,
+            Arc::new(crate::backends::mqtt::MqttDeviceClient::default()),
+        );
         #[cfg(feature = "opcua")]
         facade.install(
             Protocol::OpcUa,
             Arc::new(crate::backends::opcua::OpcUaDeviceClient::default()),
         );
-        let files = Arc::new(crate::backends::file::FileDeviceClient);
-        facade.install(Protocol::File, files.clone());
-        facade.install(Protocol::Sftp, files);
         facade
     }
-    pub fn install(&mut self, protocol: Protocol, client: Arc<dyn DeviceClient>) {
+    pub fn install(&mut self, protocol: Protocol, client: Arc<dyn DeviceFacade>) {
         self.clients.insert(protocol.into(), client);
     }
     pub async fn execute(
@@ -160,9 +133,6 @@ impl DeviceGatewayFacade {
         match request.operation {
             Operation::Read if !cap.read => return Err(DeviceGatewayError::unsupported("Backend cannot read")),
             Operation::Write if !cap.write => return Err(DeviceGatewayError::unsupported("Backend cannot write")),
-            Operation::Transfer if !cap.transfer => {
-                return Err(DeviceGatewayError::unsupported("Backend cannot transfer files"));
-            }
             _ => {}
         }
         if matches!(request.operation, Operation::Poll | Operation::Subscribe) {
@@ -200,9 +170,6 @@ impl DeviceGatewayFacade {
                 let mut probe = RequestOutput::default();
                 self.read_write(&request, input, &mut probe, deadline, client.clone())
                     .await?;
-                if matches!(probe.outcome(), ExecutionOutcome::Failed | ExecutionOutcome::Partial) {
-                    return Err(DeviceGatewayError::transport("Polling probe returned failed items"));
-                }
                 sink.emit(batch(&request, probe.items))?;
                 let facade = Arc::downgrade(self);
                 let req = request.clone();
@@ -228,7 +195,12 @@ impl DeviceGatewayFacade {
                                     tracing::error!(request=%req.name,error=%error,"Field sample was not queued");
                                 }
                             }
-                            Err(error) => tracing::error!(request=%req.name,error=%error,"Field polling failed"),
+                            Err(error) => {
+                                tracing::error!(request=%req.name,error=%error,"Field polling failed; acquisition continues");
+                                let mut failed = batch(&req, out.items);
+                                failed.errors.push(error.to_string());
+                                let _ = sink.emit(failed);
+                            }
                         }
                     }
                 })
@@ -255,7 +227,7 @@ impl DeviceGatewayFacade {
         input: &RequestInput,
         output: &mut RequestOutput,
         deadline: Instant,
-        client: Arc<dyn DeviceClient>,
+        client: Arc<dyn DeviceFacade>,
     ) -> Result<(), DeviceGatewayError> {
         let mut physical = input.clone();
         if request.operation == Operation::Write {
@@ -270,7 +242,7 @@ impl DeviceGatewayFacade {
                 );
             }
         }
-        let writing = matches!(request.operation, Operation::Write | Operation::Transfer);
+        let writing = request.operation == Operation::Write;
         let execution = tokio::time::timeout_at(deadline.into(), client.execute(request, &physical, output, deadline))
             .await
             .map_err(|_| DeviceGatewayError::timeout(writing))
@@ -314,12 +286,16 @@ impl DeviceGatewayFacade {
     pub async fn close(&self) {
         let _guard = self.lifecycle.lock().await;
         self.closed.store(true, Ordering::Release);
+        for client in self.clients.values() {
+            client.shutting_down();
+        }
         let subs = std::mem::take(&mut *self.subscriptions.lock().await);
         for sub in subs.values() {
             sub.cancel.cancel();
         }
         for (_, mut sub) in subs {
-            if tokio::time::timeout(std::time::Duration::from_secs(3), &mut sub.task)
+            // A durable subscription acknowledges what the host stored before it ends.
+            if tokio::time::timeout(std::time::Duration::from_secs(12), &mut sub.task)
                 .await
                 .is_err()
             {
@@ -360,6 +336,17 @@ fn decode_results(request: &PreparedDeviceRequest, results: &mut [ItemResult]) {
 fn batch(request: &PreparedDeviceRequest, items: Vec<ItemResult>) -> SampleBatch {
     SampleBatch {
         request_name: request.name.clone(),
+        errors: items
+            .iter()
+            .filter(|i| matches!(i.status, ItemStatus::Failed | ItemStatus::Uncertain))
+            .map(|i| {
+                format!(
+                    "{}: {}",
+                    i.parameter_id,
+                    i.error.as_deref().unwrap_or("Acquisition failed")
+                )
+            })
+            .collect(),
         logging: request.logging,
         request: Some(Arc::new(request.clone())),
         samples: items
@@ -383,21 +370,38 @@ struct DecodedSink {
     request: Arc<PreparedDeviceRequest>,
     inner: Arc<dyn SampleSink>,
 }
+#[async_trait::async_trait]
 impl SampleSink for DecodedSink {
-    fn emit(&self, mut value: SampleBatch) -> Result<(), DeviceGatewayError> {
+    fn emit(&self, value: SampleBatch) -> Result<(), DeviceGatewayError> {
+        self.inner.emit(self.decode(value))
+    }
+
+    async fn deliver(&self, value: SampleBatch) -> Result<crate::device_facade::Receipt, DeviceGatewayError> {
+        self.inner.deliver(self.decode(value)).await
+    }
+}
+impl DecodedSink {
+    fn decode(&self, mut value: SampleBatch) -> SampleBatch {
         value.request = Some(self.request.clone());
         if !self.request.plc_log {
-            for sample in &mut value.samples {
+            value.samples.retain_mut(|sample| {
                 if let Some(item) = self
                     .request
                     .items
                     .iter()
                     .find(|i| Some(&i.parameter_id) == sample.parameter_id.as_ref())
                 {
-                    sample.value = item.codec.decode(&sample.value, item.kind)?;
+                    match item.codec.decode(&sample.value, item.kind) {
+                        Ok(decoded) => sample.value = decoded,
+                        Err(error) => {
+                            value.errors.push(format!("{}: {}", item.parameter_id, error));
+                            return false;
+                        }
+                    }
                 }
-            }
+                true
+            });
         }
-        self.inner.emit(value)
+        value
     }
 }

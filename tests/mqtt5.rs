@@ -131,12 +131,10 @@ async fn rejected_puback_cannot_report_success() {
         ..Default::default()
     };
     let mut out = RequestOutput::default();
-    assert_eq!(
-        f.execute(r.clone(), &input, &mut out, r.deadline(), None)
-            .await
-            .unwrap(),
-        ExecutionOutcome::Failed
-    );
+    assert!(f
+        .execute(r.clone(), &input, &mut out, r.deadline(), None)
+        .await
+        .is_err());
     assert_eq!(out.items[0].status, ItemStatus::Failed);
     server.await.unwrap();
     f.close().await;
@@ -195,4 +193,109 @@ async fn payload_without_items_is_one_publication_on_the_request_topic() {
     );
     server.await.unwrap();
     f.close().await;
+}
+/// A host that keeps every receipt until the test says it stored the batch, or gave it up.
+#[derive(Default)]
+struct HeldSink {
+    done: std::sync::Mutex<Vec<tokio::sync::oneshot::Sender<()>>>,
+    delivered: tokio::sync::Notify,
+}
+#[async_trait::async_trait]
+impl SampleSink for HeldSink {
+    fn emit(&self, _: SampleBatch) -> Result<(), DeviceGatewayError> {
+        panic!("a durable subscription must deliver, not emit");
+    }
+    async fn deliver(&self, batch: SampleBatch) -> Result<Receipt, DeviceGatewayError> {
+        assert_eq!(batch.samples.len(), 1);
+        let (done, receipt) = Receipt::pending();
+        self.done.lock().unwrap().push(done);
+        self.delivered.notify_one();
+        Ok(receipt)
+    }
+}
+/// A QoS 1 message of a durable subscription is acknowledged once the host stored it, never on receipt; one the host
+/// gives up is never acknowledged, so the broker keeps it.
+#[tokio::test]
+async fn durable_subscription_acknowledges_only_stored_messages() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ep = format!("mqtt://{}", listener.local_addr().unwrap());
+    let (acked_tx, mut acked) = tokio::sync::mpsc::unbounded_channel::<[u8; 2]>();
+    let server = tokio::spawn(async move {
+        let (mut s, _) = listener.accept().await.unwrap();
+        s.set_nodelay(true).unwrap();
+        let (header, body) = packet(&mut s).await;
+        assert_eq!(header, 0x10);
+        assert_eq!(&body[..7], &[0, 4, b'M', b'Q', b'T', b'T', 5]);
+        assert_eq!(body[7] & 0x02, 0, "a durable subscription needs a persistent session");
+        assert!(
+            body.windows(3).any(|w| w == [0x21, 0x01, 0x00]),
+            "CONNECT must announce receive-maximum 256"
+        );
+        send(&mut s, 0x20, &[0, 0, 0]).await;
+        let (header, body) = packet(&mut s).await;
+        assert_eq!(header, 0x82);
+        send(&mut s, 0x90, &[body[0], body[1], 0, 1]).await;
+        for id in [1u8, 2] {
+            let topic = b"/test/topic";
+            let mut publish = vec![0, topic.len() as u8];
+            publish.extend(topic);
+            publish.extend([0, id, 0]);
+            publish.extend(br#"{"temperature":21}"#);
+            send(&mut s, 0x32, &publish).await;
+        }
+        loop {
+            // The client closes the connection after its unsubscribe.
+            let mut first = [0u8; 1];
+            match tokio::time::timeout(Duration::from_secs(3), s.peek(&mut first)).await {
+                Ok(Ok(1..)) => {}
+                _ => break,
+            }
+            match packet(&mut s).await {
+                (0x40, body) => acked_tx.send([body[0], body[1]]).unwrap(),
+                (0xa2, body) => send(&mut s, 0xb0, &[body[0], body[1], 0, 0]).await,
+                _ => {}
+            }
+        }
+    });
+    let mut r = common::request(Protocol::Mqtt, ep, Operation::Subscribe);
+    r.items[0].address = "/test/topic".into();
+    let r = Arc::new(r);
+    let f = Arc::new(DeviceGatewayFacade::new());
+    let sink = Arc::new(HeldSink::default());
+    let mut out = RequestOutput::default();
+    f.execute(
+        r.clone(),
+        &RequestInput::default(),
+        &mut out,
+        r.deadline(),
+        Some(sink.clone()),
+    )
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        tokio::time::timeout(Duration::from_secs(2), sink.delivered.notified())
+            .await
+            .expect("message delivered to the host");
+    }
+    // Received and delivered, but not stored: the broker must still hold both.
+    assert!(tokio::time::timeout(Duration::from_millis(300), acked.recv())
+        .await
+        .is_err());
+    let (first, second) = {
+        let mut done = sink.done.lock().unwrap();
+        (done.remove(0), done.remove(0))
+    };
+    first.send(()).unwrap();
+    let id = tokio::time::timeout(Duration::from_secs(2), acked.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(id, [0, 1]);
+    // The host gives up the second (a shutdown before the database answered): no acknowledgement.
+    drop(second);
+    assert!(tokio::time::timeout(Duration::from_millis(300), acked.recv())
+        .await
+        .is_err());
+    f.close().await;
+    server.await.unwrap();
 }

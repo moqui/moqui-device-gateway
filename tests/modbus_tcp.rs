@@ -179,3 +179,78 @@ async fn bulk_items_share_one_tcp_response() {
     server.await.unwrap();
     f.close().await;
 }
+
+#[tokio::test]
+async fn bulk_write_sends_one_ordered_pdu() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = listener.local_addr().unwrap().to_string();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut header = [0; 7];
+        stream.read_exact(&mut header).await.unwrap();
+        let length = u16::from_be_bytes([header[4], header[5]]) as usize - 1;
+        let mut pdu = vec![0; length];
+        stream.read_exact(&mut pdu).await.unwrap();
+        assert_eq!(pdu, [16, 0, 2, 0, 2, 4, 0, 10, 0, 20]);
+        header[4..6].copy_from_slice(&6u16.to_be_bytes());
+        stream.write_all(&header).await.unwrap();
+        stream.write_all(&pdu[..5]).await.unwrap();
+        // The facade is closed before this task is joined: a second PDU is a regression.
+        assert_eq!(stream.read(&mut [0; 1]).await.unwrap(), 0);
+    });
+    let mut r = common::request(Protocol::ModbusTcp, endpoint, Operation::Write);
+    r.items[0].address = "holding-register:2:UINT[2]".into();
+    r.items[0].physical_type = PhysicalType::U16;
+    r.items[0].bulk_index = Some(1);
+    let mut first = r.items[0].clone();
+    first.parameter_id = "first".into();
+    first.bulk_index = Some(0);
+    r.items.push(first);
+    let r = Arc::new(r);
+    let input = RequestInput {
+        values: std::collections::BTreeMap::from([
+            ("test-param".into(), FieldValue::Unsigned(20)),
+            ("first".into(), FieldValue::Unsigned(10)),
+        ]),
+        ..Default::default()
+    };
+    let f = Arc::new(DeviceGatewayFacade::new());
+    let mut out = RequestOutput::default();
+    assert_eq!(
+        f.execute(r.clone(), &input, &mut out, r.deadline(), None)
+            .await
+            .unwrap(),
+        ExecutionOutcome::Completed
+    );
+    assert_eq!(out.items.len(), 2);
+    f.close().await;
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn incomplete_bulk_write_is_rejected_before_connecting() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut r = common::request(
+        Protocol::ModbusTcp,
+        listener.local_addr().unwrap().to_string(),
+        Operation::Write,
+    );
+    r.items[0].address = "holding-register:2:UINT[2]".into();
+    r.items[0].physical_type = PhysicalType::U16;
+    r.items[0].bulk_index = Some(0);
+    let r = Arc::new(r);
+    let f = Arc::new(DeviceGatewayFacade::new());
+    let input = RequestInput {
+        values: std::collections::BTreeMap::from([("test-param".into(), FieldValue::Unsigned(10))]),
+        ..Default::default()
+    };
+    let error = f
+        .execute(r.clone(), &input, &mut RequestOutput::default(), r.deadline(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Invalid);
+    assert!(tokio::time::timeout(Duration::from_millis(30), listener.accept())
+        .await
+        .is_err());
+    f.close().await;
+}

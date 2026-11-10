@@ -12,12 +12,11 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
-pub mod file;
 #[cfg(feature = "modbus")]
 pub mod modbus;
 #[cfg(feature = "mqtt")]
 pub mod mqtt;
+#[cfg(feature = "mqtt")]
+mod mqtt_session;
 #[cfg(feature = "opcua")]
 pub mod opcua;
-#[cfg(feature = "sftp")]
-pub mod sftp;

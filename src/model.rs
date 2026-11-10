@@ -99,7 +99,6 @@ pub enum Operation {
     Subscribe,
     Poll,
     Unsubscribe,
-    Transfer,
 }
 impl Operation {
     pub fn from_enum(value: &str) -> Result<Self, DeviceGatewayError> {
@@ -109,7 +108,6 @@ impl Operation {
             "DrtSubscribe" | "DrtEvent" | "DrtStateChange" => Self::Subscribe,
             "DrtCyclic" => Self::Poll,
             "DrtUnsubscribe" => Self::Unsubscribe,
-            "DrtContentTransfer" => Self::Transfer,
             _ => return Err(DeviceGatewayError::unsupported("Unsupported DeviceRequest type")),
         })
     }
@@ -119,8 +117,6 @@ pub enum Protocol {
     ModbusTcp,
     Mqtt,
     OpcUa,
-    File,
-    Sftp,
 }
 #[derive(Clone, Default)]
 pub struct Credentials {
@@ -230,14 +226,8 @@ impl PreparedDeviceRequest {
 #[derive(Clone, Debug, Default)]
 pub struct RequestInput {
     pub values: BTreeMap<String, FieldValue>,
-    pub files: Vec<TransferFile>,
     /// A message sent as it is by a write without items (an MQTT publication on the request topic).
     pub payload: Option<Vec<u8>>,
-}
-#[derive(Clone, Debug)]
-pub struct TransferFile {
-    pub name: String,
-    pub bytes: Vec<u8>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -286,7 +276,6 @@ impl ItemResult {
 pub struct RequestOutput {
     pub items: Vec<ItemResult>,
     pub subscription_id: Option<String>,
-    pub files: Vec<String>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionOutcome {
@@ -337,7 +326,6 @@ pub struct Capabilities {
     pub read: bool,
     pub write: bool,
     pub subscribe: bool,
-    pub transfer: bool,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorKind {
@@ -409,6 +397,8 @@ pub struct Sample {
 #[derive(Clone, Debug)]
 pub struct SampleBatch {
     pub request_name: String,
+    /// Acquisition/decode failures do not discard other samples in the batch.
+    pub errors: Vec<String>,
     pub logging: bool,
     pub request: Option<std::sync::Arc<PreparedDeviceRequest>>,
     pub samples: Vec<Sample>,

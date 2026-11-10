@@ -7,12 +7,11 @@ license = "CC0-1.0"
 publish = false
 
 [features]
-default = ["moqui", "mqtt", "opcua", "modbus", "sftp"]
+default = ["moqui", "mqtt", "opcua", "modbus"]
 moqui = ["dep:moqui-core", "dep:moqui-lib", "dep:indexmap", "dep:jiff"]
 mqtt = ["dep:rumqttc"]
 opcua = ["dep:opcua"]
 modbus = ["dep:tokio-modbus"]
-sftp = ["dep:russh", "dep:russh-sftp"]
 
 [dependencies]
 moqui-core = { path = "../../../crates/moqui-core", default-features = false, optional = true }
@@ -31,8 +30,6 @@ chrono = { version="0.4", default-features=false, features=["std"] }
 rumqttc = { version = "0.25.1", default-features = false, features = ["use-rustls"], optional = true }
 opcua = { package = "async-opcua", version = "0.19", features = ["client"], optional = true }
 tokio-modbus = { version = "0.17", default-features = false, features = ["tcp"], optional = true }
-russh = { version = "0.64", default-features = false, features = ["aws-lc-rs", "rsa"], optional = true }
-russh-sftp = { version = "3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

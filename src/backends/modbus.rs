@@ -13,9 +13,13 @@
  */
 
 //! PLC4J-style Modbus TCP addresses, with zero-based offsets.
-use crate::{client::DeviceClient, model::*};
+use crate::{device_facade::DeviceFacade, model::*};
 use async_trait::async_trait;
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Instant,
+};
 use tokio::{net::TcpStream, sync::Mutex};
 use tokio_modbus::{
     client::{tcp, Context, Reader, Writer},
@@ -151,13 +155,12 @@ pub fn encode_words(
     Ok(w)
 }
 #[async_trait]
-impl DeviceClient for ModbusDeviceClient {
+impl DeviceFacade for ModbusDeviceClient {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
             write: true,
             subscribe: false,
-            transfer: false,
         }
     }
     async fn execute(
@@ -204,9 +207,9 @@ impl DeviceClient for ModbusDeviceClient {
             if writing && matches!(a.area, Area::Input | Area::Discrete) {
                 return Err(DeviceGatewayError::invalid("Cannot write a read-only Modbus area"));
             }
-            if writing && a.count != 1 {
-                return Err(DeviceGatewayError::unsupported(
-                    "Bulk writes require explicit scalar addresses",
+            if writing && a.count > 1 && i.bulk_index.is_none() {
+                return Err(DeviceGatewayError::invalid(
+                    "Bulk writes require one indexed item per array value",
                 ));
             }
             let v = if writing {
@@ -231,6 +234,57 @@ impl DeviceClient for ModbusDeviceClient {
         }
         if plans.is_empty() {
             return Err(DeviceGatewayError::invalid("Modbus request has no items"));
+        }
+        // A bulk PDU is assembled and validated in full before opening a connection or sending any command.
+        let mut bulk_words = HashMap::new();
+        let mut bulk_coils = HashMap::new();
+        if writing {
+            for (item, address, _, _) in &plans {
+                if address.count == 1
+                    || bulk_words.contains_key(&item.address)
+                    || bulk_coils.contains_key(&item.address)
+                {
+                    continue;
+                }
+                let mut indices = vec![None; address.count as usize];
+                for (other, _, value, words) in &plans {
+                    if other.address == item.address {
+                        let index = other
+                            .bulk_index
+                            .ok_or_else(|| DeviceGatewayError::invalid("Missing bulk index"))?;
+                        if indices[index].replace((value, words)).is_some() {
+                            return Err(DeviceGatewayError::invalid("Duplicate bulk write index"));
+                        }
+                    }
+                }
+                if indices.iter().any(Option::is_none) {
+                    return Err(DeviceGatewayError::invalid(
+                        "Bulk write must provide every configured array element",
+                    ));
+                }
+                if address.area == Area::Coil {
+                    if address.count > 1968 {
+                        return Err(DeviceGatewayError::invalid("Modbus coil write exceeds PDU bounds"));
+                    }
+                    let values = indices
+                        .into_iter()
+                        .map(|entry| match entry {
+                            Some((Some(FieldValue::Bool(value)), _)) => Ok(*value),
+                            _ => Err(DeviceGatewayError::invalid("Bulk coil write requires booleans")),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    bulk_coils.insert(item.address.clone(), values);
+                } else {
+                    let values = indices
+                        .into_iter()
+                        .flat_map(|entry| entry.into_iter().flat_map(|(_, words)| words.iter().copied()))
+                        .collect::<Vec<_>>();
+                    if values.len() > 123 {
+                        return Err(DeviceGatewayError::invalid("Modbus register write exceeds PDU bounds"));
+                    }
+                    bulk_words.insert(item.address.clone(), values);
+                }
+            }
         }
         let slot = self
             .sessions
@@ -258,10 +312,30 @@ impl DeviceClient for ModbusDeviceClient {
             tcp::attach_slave(stream, Slave(unit))
         };
         let mut read_cache: HashMap<String, Vec<FieldValue>> = HashMap::new();
+        let mut written_bulk = HashSet::new();
         for (i, a, v, w) in plans {
             let op = async {
                 let exception = |e| DeviceGatewayError::transport(format!("Modbus exception: {e}"));
                 if writing {
+                    if a.count > 1 {
+                        if !written_bulk.contains(&i.address) {
+                            if let Some(values) = bulk_coils.get(&i.address) {
+                                ctx.write_multiple_coils(a.offset, values)
+                                    .await
+                                    .map_err(|e| transport(e, true))?
+                                    .map_err(exception)?;
+                            } else if let Some(values) = bulk_words.get(&i.address) {
+                                ctx.write_multiple_registers(a.offset, values)
+                                    .await
+                                    .map_err(|e| transport(e, true))?
+                                    .map_err(exception)?;
+                            }
+                            written_bulk.insert(i.address.clone());
+                        }
+                        return Ok(v
+                            .ok_or_else(|| DeviceGatewayError::invalid("Missing bulk value"))?
+                            .clone());
+                    }
                     match a.area {
                         Area::Coil => {
                             let FieldValue::Bool(v) = v.unwrap() else {

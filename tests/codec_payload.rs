@@ -106,7 +106,9 @@ fn plc_logs_preserve_identity_enum_and_device_event() {
     assert!(b.samples[1].parameter_id.is_none());
     assert!(matches!(b.samples[1].value, FieldValue::Record(_)));
     assert_eq!(b.samples[2].value, FieldValue::Text("0010".into()));
-    assert!(payload::plc_log_batch(&r, br#"{"1":{"loggerName":"other","message":"spoofed"}}"#).is_err());
+    // Decoding preserves the identity; the Moqui binding checks group membership before persistence.
+    let child = payload::plc_log_batch(&r, br#"{"1":{"loggerName":"child-device","message":"event"}}"#).unwrap();
+    assert_eq!(child.samples[0].device_id, "child-device");
 }
 #[test]
 fn connection_debug_redacts_credentials_and_legacy_uri_secrets() {

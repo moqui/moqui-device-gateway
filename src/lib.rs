@@ -12,26 +12,24 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
-//! Native field communication with a transport API independent of Moqui facades.
+//! Field communication drivers with a common facade, independent of Moqui.
 //!
-//! Moqui services (service/moqui/device/gateway): one run#DeviceRequest per protocol (MqttServices, OpcUaServices,
-//! ModbusServices, FileServices, PlcLogServices), each an implementation of
-//! moqui.device.DeviceServices.run#DeviceRequestInternal; InboundServices stores what the devices send;
-//! SubscriptionServices restores the subscriptions after a start. DeviceGatewayToolFactory is the registry of
-//! connections and subscriptions; each protocol is a DeviceClient (MqttDeviceClient, OpcUaDeviceClient,
-//! ModbusDeviceClient, FileDeviceClient for file and SFTP).
+//! Each protocol is a backend implementing [`DeviceFacade`] (MQTT, OPC UA, Modbus TCP), each behind its Cargo feature.
+//! [`DeviceGatewayFacade`] is the registry of their connections and subscriptions and gives them one API:
+//! execute a read, write, subscription or unsubscription, with continuous samples delivered to a [`SampleSink`].
+//! Any Rust host creates one with a Tokio runtime. Under the `moqui` feature, [`DeviceGatewayToolFactory`] holds one
+//! for MR-Moqui; the services, persistence and notifications are those of moqui-device.
 pub mod backends;
-#[cfg(feature = "moqui")]
-pub mod binding;
 pub mod client;
 pub mod codec;
+pub mod device_facade;
 pub mod model;
-pub mod notifier;
 pub mod payload;
 #[cfg(feature = "moqui")]
 pub mod tool;
 
-pub use client::{DeviceClient, DeviceGatewayFacade, SampleSink};
+pub use client::DeviceGatewayFacade;
+pub use device_facade::{DeviceFacade, Receipt, SampleSink};
 pub use model::*;
 #[cfg(feature = "moqui")]
 pub use tool::DeviceGatewayToolFactory;
@@ -46,17 +44,6 @@ mod native {
     fn register(registry: &mut NativeRegistry) -> Result<(), Error> {
         registry.tool("moqui_device_gateway::DeviceGatewayToolFactory", || {
             std::sync::Arc::new(crate::tool::DeviceGatewayToolFactory::default())
-        })?;
-        use crate::binding::*;
-        registry.service_function("moqui_device_gateway::binding::run_mqtt_request", run_mqtt_request)?;
-        registry.service_function("moqui_device_gateway::binding::run_opcua_request", run_opcua_request)?;
-        registry.service_function("moqui_device_gateway::binding::run_modbus_request", run_modbus_request)?;
-        registry.service_function("moqui_device_gateway::binding::run_file_request", run_file_request)?;
-        registry.service_function(
-            "moqui_device_gateway::binding::run_plc_log_request",
-            run_plc_log_request,
-        )?;
-        registry.service_function("moqui_device_gateway::binding::store_samples", store_samples)?;
-        registry.service_function("moqui_device_gateway::binding::subscription_state", subscription_state)
+        })
     }
 }

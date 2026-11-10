@@ -12,149 +12,80 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
-//! MQTT 5: success means PUBACK/SUBACK, not merely enqueueing a command.
+//! MQTT 3.1.1/5 request execution, retained reads and cancellation-aware subscription recovery.
+use super::mqtt_session::{Ack, Acker, Event, Session, Settings};
 use crate::{
-    client::{DeviceClient, SampleSink},
+    device_facade::{DeviceFacade, Receipt, SampleSink},
     model::*,
     payload,
 };
 use async_trait::async_trait;
-use rumqttc::{
-    v5::{
-        mqttbytes::{
-            v5::{Packet, PubAckReason, SubscribeReasonCode},
-            QoS,
-        },
-        AsyncClient, Event, EventLoop, MqttOptions,
-    },
-    Transport,
-};
 use std::{
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, Instant, SystemTime},
+    time::{Instant, SystemTime},
 };
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
+
 #[derive(Default)]
-pub struct MqttDeviceClient;
-static NEXT_CLIENT: AtomicU64 = AtomicU64::new(1);
-fn session(request: &PreparedDeviceRequest) -> Result<(AsyncClient, EventLoop), DeviceGatewayError> {
-    let c = &request.connection;
-    let url = url::Url::parse(&c.endpoint)
-        .map_err(|_| DeviceGatewayError::invalid("MQTT endpoint must be mqtt:// or mqtts://"))?;
-    if !matches!(url.scheme(), "mqtt" | "mqtts")
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || !matches!(url.path(), "" | "/")
-    {
-        return Err(DeviceGatewayError::invalid(
-            "Use a broker URL without credentials, topic, or query; configure options separately",
-        ));
-    }
-    for key in c.options.keys() {
-        if !matches!(key.as_str(), "client-id-prefix" | "keep-alive-seconds" | "retain") {
-            return Err(DeviceGatewayError::unsupported(format!("Unknown MQTT option: {key}")));
-        }
-    }
-    let id = format!(
-        "{}-{}-{}",
-        c.options
-            .get("client-id-prefix")
-            .map(String::as_str)
-            .unwrap_or("moqui-device-gateway"),
-        std::process::id(),
-        NEXT_CLIENT.fetch_add(1, Ordering::Relaxed)
-    );
-    let mut options = MqttOptions::new(
-        id,
-        url.host_str()
-            .ok_or_else(|| DeviceGatewayError::invalid("Missing MQTT host"))?,
-        url.port().unwrap_or(if url.scheme() == "mqtts" { 8883 } else { 1883 }),
-    );
-    if url.scheme() == "mqtts" {
-        options.set_transport(Transport::tls_with_default_config());
-    }
-    let keep = c
-        .options
-        .get("keep-alive-seconds")
-        .map(|v| v.parse::<u64>())
-        .transpose()
-        .map_err(|_| DeviceGatewayError::invalid("Invalid MQTT keep-alive"))?
-        .unwrap_or(30);
-    if !(5..=3600).contains(&keep) {
-        return Err(DeviceGatewayError::invalid("MQTT keep-alive must be 5..3600 seconds"));
-    }
-    options.set_keep_alive(Duration::from_secs(keep));
-    if let Some(user) = &c.credentials.username {
-        options.set_credentials(user, c.credentials.password.as_deref().unwrap_or(""));
-    }
-    options.set_clean_start(true);
-    Ok(AsyncClient::new(options, 32))
+pub struct MqttDeviceClient {
+    /// Set when the host shuts down: subscriptions then end without unsubscribing, so each persistent session keeps
+    /// collecting in the broker until the gateway is back.
+    shutdown: Arc<AtomicBool>,
 }
-fn topic(request: &PreparedDeviceRequest, item: Option<&Item>) -> Result<String, DeviceGatewayError> {
-    let topic = item
-        .map(|i| i.address.as_str())
+
+fn topic(r: &PreparedDeviceRequest, item: Option<&Item>) -> Result<String, DeviceGatewayError> {
+    item.map(|i| i.address.as_str())
         .filter(|s| !s.is_empty())
-        .or(request.query.as_deref())
+        .or(r.query.as_deref())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| DeviceGatewayError::invalid("MQTT topic is required"))?;
-    Ok(topic.into())
+        .map(String::from)
+        .ok_or_else(|| DeviceGatewayError::invalid("MQTT topic is required"))
 }
-async fn poll(events: &mut EventLoop, deadline: Instant, writing: bool) -> Result<Event, DeviceGatewayError> {
-    tokio::time::timeout_at(deadline.into(), events.poll())
+
+async fn poll(session: &mut Session, deadline: Instant, writing: bool) -> Result<Event, DeviceGatewayError> {
+    tokio::time::timeout_at(deadline.into(), session.poll())
         .await
         .map_err(|_| DeviceGatewayError::timeout(writing))?
-        .map_err(|_| {
-            let e = DeviceGatewayError::transport("MQTT connection failed");
-            if writing {
-                e.uncertain()
-            } else {
-                e
-            }
-        })
+        .map_err(|e| if writing { e.uncertain() } else { e })
 }
+
 async fn subscribe_topics(
-    client: &AsyncClient,
-    events: &mut EventLoop,
+    session: &mut Session,
     topics: &[String],
+    qos: u8,
     deadline: Instant,
-) -> Result<Vec<(String, Vec<u8>)>, DeviceGatewayError> {
+) -> Result<Vec<(String, Vec<u8>, Option<Ack>)>, DeviceGatewayError> {
     let mut pending = Vec::new();
     for topic in topics {
-        client
-            .subscribe(topic, QoS::AtLeastOnce)
-            .await
-            .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT subscription"))?;
+        session.subscribe(topic, qos).await?;
         loop {
-            match poll(events, deadline, false).await? {
-                Event::Incoming(Packet::SubAck(ack)) => {
-                    if ack.return_codes.len() != 1 || !matches!(ack.return_codes[0], SubscribeReasonCode::Success(_)) {
-                        return Err(DeviceGatewayError::transport("MQTT broker rejected subscription"));
-                    }
-                    break;
+            match poll(session, deadline, false).await? {
+                Event::Subscribed(true) => break,
+                Event::Subscribed(false) => {
+                    return Err(DeviceGatewayError::transport("MQTT broker rejected subscription"))
                 }
-                Event::Incoming(Packet::Publish(p)) => {
-                    pending.push((String::from_utf8_lossy(&p.topic).into_owned(), p.payload.to_vec()))
-                }
+                Event::Message(topic, bytes, ack) => pending.push((topic, bytes, ack)),
                 _ => {}
             }
         }
     }
     Ok(pending)
 }
+
 fn topics(r: &PreparedDeviceRequest) -> Result<Vec<String>, DeviceGatewayError> {
     let mut topics = Vec::new();
     if r.plc_log {
         topics.push(topic(r, None)?);
     } else {
-        for i in &r.items {
-            let t = topic(r, Some(i))?;
-            if !topics.contains(&t) {
-                topics.push(t);
+        for item in &r.items {
+            let topic = topic(r, Some(item))?;
+            if !topics.contains(&topic) {
+                topics.push(topic);
             }
         }
     }
@@ -163,7 +94,8 @@ fn topics(r: &PreparedDeviceRequest) -> Result<Vec<String>, DeviceGatewayError> 
     }
     Ok(topics)
 }
-fn matches_topic(filter: &str, topic: &str) -> bool {
+
+pub(crate) fn matches_topic(filter: &str, topic: &str) -> bool {
     if topic.starts_with('$') && !filter.starts_with('$') {
         return false;
     }
@@ -179,51 +111,213 @@ fn matches_topic(filter: &str, topic: &str) -> bool {
         }
     }
 }
-fn values(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8]) -> Result<Vec<ItemResult>, DeviceGatewayError> {
+
+fn values(r: &PreparedDeviceRequest, topic_name: &str, bytes: &[u8]) -> Result<Vec<ItemResult>, DeviceGatewayError> {
     let mut selected = r.clone();
     selected
         .items
-        .retain(|i| self::topic(r, Some(i)).is_ok_and(|t| matches_topic(&t, topic)));
+        .retain(|i| topic(r, Some(i)).is_ok_and(|t| matches_topic(&t, topic_name)));
     payload::read_payload(&selected, bytes)
 }
+
 fn emit(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8], sink: &dyn SampleSink) -> Result<(), DeviceGatewayError> {
+    sink.emit(batch_of(r, topic, bytes))
+}
+
+/// The batch of one message. A message that does not decode is a batch of its error: stored as a failure, it is
+/// acknowledged and does not block the session.
+fn batch_of(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8]) -> SampleBatch {
     if r.plc_log {
-        return sink.emit(payload::plc_log_batch(r, bytes)?);
+        return payload::plc_log_batch(r, bytes).unwrap_or_else(|error| SampleBatch {
+            request_name: r.name.clone(),
+            errors: vec![error.to_string()],
+            logging: true,
+            request: Some(Arc::new(r.clone())),
+            samples: Vec::new(),
+        });
     }
     let mut samples = Vec::new();
-    for i in values(r, topic, bytes)? {
-        if let Some(error) = i.error {
-            return Err(DeviceGatewayError::invalid(error));
+    let mut errors = Vec::new();
+    let items = match values(r, topic, bytes) {
+        Ok(items) => items,
+        Err(error) => {
+            errors.push(error.to_string());
+            Vec::new()
         }
-        if let Some(value) = i.value {
+    };
+    for item in items {
+        if let Some(error) = item.error {
+            errors.push(format!("{}: {}", item.parameter_id, error));
+            continue;
+        }
+        if let Some(value) = item.value {
             samples.push(Sample {
                 device_id: r.device_id.clone(),
                 log_value_kind: None,
-                parameter_id: Some(i.parameter_id),
+                parameter_id: Some(item.parameter_id),
                 value,
-                source_time: i.source_time,
+                source_time: item.source_time,
                 received_time: SystemTime::now(),
-                quality: i.quality,
+                quality: item.quality,
             });
         }
     }
-    sink.emit(SampleBatch {
+    SampleBatch {
+        errors,
         request_name: r.name.clone(),
         logging: r.logging,
         request: Some(Arc::new(r.clone())),
         samples,
-    })
+    }
 }
+
+/// What a message of a durable subscription waits for before the broker may forget it: its delivery to the host, then
+/// the host's receipt. Its permit bounds the messages held between the broker and the database.
+type Held = (String, Vec<u8>, Option<Ack>, OwnedSemaphorePermit);
+
+/// The delivery side of a durable subscription. One task delivers the messages in the order received, waiting for
+/// room in the host's queue; another acknowledges them in that order, each once the host is done with it. The polling
+/// task meanwhile keeps the session alive. A message the host gave up on (a shutdown) stays unacknowledged, and the
+/// broker delivers it again on the next connection of the session.
+struct Durable {
+    deliveries: mpsc::UnboundedSender<Held>,
+    permits: Arc<Semaphore>,
+    permit: Option<OwnedSemaphorePermit>,
+    acknowledged: tokio::task::JoinHandle<()>,
+}
+
+impl Durable {
+    fn start(r: Arc<PreparedDeviceRequest>, sink: Arc<dyn SampleSink>, acker: Acker, limit: usize) -> Self {
+        let (deliveries, mut received) = mpsc::unbounded_channel::<Held>();
+        let (delivered, mut acknowledging) =
+            mpsc::unbounded_channel::<(Option<Ack>, Option<Receipt>, OwnedSemaphorePermit)>();
+        let name = r.name.clone();
+        tokio::spawn(async move {
+            while let Some((topic, bytes, ack, permit)) = received.recv().await {
+                let receipt = match sink.deliver(batch_of(&r, &topic, &bytes)).await {
+                    Ok(receipt) => Some(receipt),
+                    Err(error) => {
+                        tracing::warn!(request=%r.name,error=%error,"MQTT message not delivered; the broker keeps it");
+                        None
+                    }
+                };
+                if delivered.send((ack, receipt, permit)).is_err() {
+                    break;
+                }
+            }
+        });
+        let acknowledged = tokio::spawn(async move {
+            while let Some((ack, receipt, permit)) = acknowledging.recv().await {
+                let finished = match receipt {
+                    Some(receipt) => receipt.finished().await,
+                    None => false,
+                };
+                // The polling task sends the acknowledgement: release the permit first, so it can poll.
+                drop(permit);
+                if let (true, Some(ack)) = (finished, ack) {
+                    if let Err(error) = acker.ack(ack).await {
+                        tracing::warn!(request=%name,error=%error,"MQTT acknowledgement not sent; the broker delivers the message again");
+                    }
+                }
+            }
+        });
+        Self {
+            deliveries,
+            permits: Arc::new(Semaphore::new(limit)),
+            permit: None,
+            acknowledged,
+        }
+    }
+
+    /// Deliver nothing more, and end once every message delivered so far is acknowledged or given up.
+    fn finish(self) -> tokio::task::JoinHandle<()> {
+        self.acknowledged
+    }
+
+    /// Wait for room for one more message; false when cancelled.
+    async fn reserve(&mut self, cancel: &CancellationToken) -> bool {
+        if self.permit.is_none() {
+            tokio::select! { biased;
+                _ = cancel.cancelled() => return false,
+                permit = self.permits.clone().acquire_owned() => self.permit = permit.ok(),
+            }
+        }
+        self.permit.is_some()
+    }
+
+    async fn hold(&mut self, cancel: &CancellationToken, topic: String, bytes: Vec<u8>, ack: Option<Ack>) -> bool {
+        if !self.reserve(cancel).await {
+            return false;
+        }
+        let Some(permit) = self.permit.take() else {
+            return false;
+        };
+        self.deliveries.send((topic, bytes, ack, permit)).is_ok()
+    }
+}
+
+/// A received message: held until stored on a durable subscription, otherwise emitted (acknowledged on receipt).
+async fn forward(
+    durable: &mut Option<Durable>,
+    cancel: &CancellationToken,
+    r: &PreparedDeviceRequest,
+    sink: &dyn SampleSink,
+    (topic, bytes, ack): (String, Vec<u8>, Option<Ack>),
+    recovered: bool,
+) -> bool {
+    match durable {
+        Some(durable) => durable.hold(cancel, topic, bytes, ack).await,
+        None => {
+            if let Err(error) = emit(r, &topic, &bytes, sink) {
+                if recovered {
+                    tracing::error!(request=%r.name,error=%error,"MQTT recovered sample rejected");
+                } else {
+                    tracing::error!(request=%r.name,error=%error,"MQTT sample rejected");
+                }
+            }
+            true
+        }
+    }
+}
+
+async fn publish(
+    session: &mut Session,
+    topic: &str,
+    bytes: Vec<u8>,
+    config: &Settings,
+    deadline: Instant,
+) -> Result<(), DeviceGatewayError> {
+    session.publish(topic, bytes, config).await?;
+    loop {
+        match poll(session, deadline, true).await? {
+            Event::Published(true) => return Ok(()),
+            Event::Published(false) => return Err(DeviceGatewayError::transport("MQTT broker rejected publication")),
+            _ => {}
+        }
+    }
+}
+
+fn publish_topic(topic: &str) -> Result<(), DeviceGatewayError> {
+    if topic.is_empty() || topic.contains(['#', '+', '\0']) || topic.len() > u16::MAX as usize {
+        return Err(DeviceGatewayError::invalid("Invalid MQTT publication topic"));
+    }
+    Ok(())
+}
+
 #[async_trait]
-impl DeviceClient for MqttDeviceClient {
+impl DeviceFacade for MqttDeviceClient {
+    fn shutting_down(&self) {
+        self.shutdown.store(true, Ordering::Release);
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
             write: true,
             subscribe: true,
-            transfer: false,
         }
     }
+
     async fn execute(
         &self,
         r: &PreparedDeviceRequest,
@@ -231,98 +325,59 @@ impl DeviceClient for MqttDeviceClient {
         out: &mut RequestOutput,
         deadline: Instant,
     ) -> Result<(), DeviceGatewayError> {
-        let (client, mut events) = session(r)?;
+        let config = Settings::parse(r)?;
+        let mut session = Session::new(r, &config)?;
         if r.operation == Operation::Write {
-            let retain = match r
-                .connection
-                .options
-                .get("retain")
-                .map(String::as_str)
-                .unwrap_or("false")
-            {
-                "true" => true,
-                "false" => false,
-                _ => return Err(DeviceGatewayError::invalid("MQTT retain must be true or false")),
-            };
-            if let Some(message) = &input.payload {
-                // One message on the request topic, as the trajectory export sends it.
+            if let Some(bytes) = &input.payload {
                 let topic = topic(r, None)?;
-                if topic.contains(['#', '+']) {
-                    return Err(DeviceGatewayError::invalid(
-                        "MQTT publication topic cannot contain wildcards",
-                    ));
-                }
-                client
-                    .publish(topic, QoS::AtLeastOnce, retain, message.clone())
-                    .await
-                    .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT publication"))?;
-                loop {
-                    if let Event::Incoming(Packet::PubAck(ack)) = poll(&mut events, deadline, true).await? {
-                        if !matches!(ack.reason, PubAckReason::Success | PubAckReason::NoMatchingSubscribers) {
-                            return Err(DeviceGatewayError::transport("MQTT broker rejected publication"));
-                        }
-                        return Ok(());
-                    }
-                }
+                publish_topic(&topic)?;
+                return publish(&mut session, &topic, bytes.clone(), &config, deadline).await;
             }
-            // Preflight every payload before sending the first command.
+            // Validate every command before sending the first one. Never retry a finite write.
             let plans = r
                 .items
                 .iter()
-                .map(|i| Ok((i, topic(r, Some(i))?, payload::write_item_payload(i, input)?)))
+                .map(|item| {
+                    let topic = topic(r, Some(item))?;
+                    publish_topic(&topic)?;
+                    Ok((item, topic, payload::write_item_payload(item, input)?))
+                })
                 .collect::<Result<Vec<_>, DeviceGatewayError>>()?;
             if plans.is_empty() {
                 return Err(DeviceGatewayError::invalid("MQTT write has no items"));
             }
-            for (_, topic, _) in &plans {
-                if topic.contains(['#', '+']) {
-                    return Err(DeviceGatewayError::invalid(
-                        "MQTT publication topic cannot contain wildcards",
-                    ));
-                }
-            }
-            for (i, topic, bytes) in plans {
-                client
-                    .publish(topic, QoS::AtLeastOnce, retain, bytes)
-                    .await
-                    .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT publication"))?;
-                loop {
-                    if let Event::Incoming(Packet::PubAck(ack)) = poll(&mut events, deadline, true).await? {
-                        if !matches!(ack.reason, PubAckReason::Success | PubAckReason::NoMatchingSubscribers) {
-                            out.items.push(ItemResult::error(
-                                &i.parameter_id,
-                                DeviceGatewayError::transport("MQTT broker rejected publication"),
-                            ));
-                            break;
-                        }
-                        out.items.push(ItemResult::value(
-                            &i.parameter_id,
-                            input.values[&i.parameter_id].clone(),
-                        ));
-                        break;
+            for (item, topic, bytes) in plans {
+                match publish(&mut session, &topic, bytes, &config, deadline).await {
+                    Ok(()) => out.items.push(ItemResult::value(
+                        &item.parameter_id,
+                        input.values[&item.parameter_id].clone(),
+                    )),
+                    Err(error) => {
+                        out.items.push(ItemResult::error(&item.parameter_id, error.clone()));
+                        return Err(error);
                     }
                 }
             }
         } else {
-            let pending = subscribe_topics(&client, &mut events, &topics(r)?, deadline).await?;
+            let pending = subscribe_topics(&mut session, &topics(r)?, config.qos, deadline).await?;
             let mut received = BTreeMap::new();
-            for (t, p) in pending {
-                for i in values(r, &t, &p)? {
-                    received.insert(i.parameter_id.clone(), i);
+            for (topic, bytes, _) in pending {
+                for item in values(r, &topic, &bytes)? {
+                    received.insert(item.parameter_id.clone(), item);
                 }
             }
             while received.len() < r.items.len() {
-                if let Event::Incoming(Packet::Publish(p)) = poll(&mut events, deadline, false).await? {
-                    for i in values(r, &String::from_utf8_lossy(&p.topic), &p.payload)? {
-                        received.insert(i.parameter_id.clone(), i);
+                if let Event::Message(topic, bytes, _) = poll(&mut session, deadline, false).await? {
+                    for item in values(r, &topic, &bytes)? {
+                        received.insert(item.parameter_id.clone(), item);
                     }
                 }
             }
             out.items.extend(received.into_values());
         }
-        // Dropping the event loop closes this finite request session. No write is replayed.
         Ok(())
     }
+
     async fn subscribe(
         &self,
         r: Arc<PreparedDeviceRequest>,
@@ -330,29 +385,120 @@ impl DeviceClient for MqttDeviceClient {
         cancel: CancellationToken,
         deadline: Instant,
     ) -> Result<tokio::task::JoinHandle<()>, DeviceGatewayError> {
-        let (client, mut events) = session(&r)?;
-        let pending = subscribe_topics(&client, &mut events, &topics(&r)?, deadline).await?;
-        for (t, p) in pending {
-            emit(&r, &t, &p, sink.as_ref())?;
-        }
+        let config = Settings::parse(&r)?;
+        let mut session = Session::new(&r, &config)?;
+        let topics = topics(&r)?;
+        let pending = subscribe_topics(&mut session, &topics, config.qos, deadline).await?;
+        // MQTT 5 asks the broker to send no more than receive-maximum unacknowledged messages; the margin is for what
+        // arrives while subscribing. MQTT 3.1.1 has no such limit, so a full window pauses polling: a pause past the
+        // keepalive closes the connection, and the session delivers the unacknowledged messages again.
+        let limit = usize::from(config.receive_maximum) + if config.version == 5 { 64 } else { 0 };
+        let shutdown = self.shutdown.clone();
+        let mut durable = config
+            .durable
+            .then(|| Durable::start(r.clone(), sink.clone(), session.acker(), limit));
         Ok(tokio::spawn(async move {
-            let _client = client;
+            for message in pending {
+                if !forward(&mut durable, &cancel, &r, sink.as_ref(), message, false).await {
+                    break;
+                }
+            }
             loop {
-                tokio::select! {biased;_=cancel.cancelled()=>break,event=events.poll()=>match event{
-                Ok(Event::Incoming(Packet::Publish(p)))=>if let Err(error)=emit(&r,&String::from_utf8_lossy(&p.topic),&p.payload,sink.as_ref()){tracing::error!(request=%r.name,error=%error,"MQTT sample rejected");},
-                Ok(_)=>{},Err(_)=>{tracing::error!(request=%r.name,"MQTT subscription disconnected; start#Subscriptions restarts it within a minute");break;}}}
+                if config.version == 3 {
+                    if let Some(durable) = durable.as_mut() {
+                        if !durable.reserve(&cancel).await {
+                            break;
+                        }
+                    }
+                }
+                let event = tokio::select! { biased; _ = cancel.cancelled() => break, event = session.poll() => event };
+                match event {
+                    Ok(Event::Message(topic, bytes, ack)) => {
+                        if !forward(&mut durable, &cancel, &r, sink.as_ref(), (topic, bytes, ack), false).await {
+                            break;
+                        }
+                    }
+                    Ok(Event::Connected) => {
+                        // Re-subscribe even if the broker lost its persistent session. Do not replay any command writes.
+                        let restored = tokio::select! { biased;
+                            _ = cancel.cancelled() => break,
+                            result = subscribe_topics(&mut session, &topics, config.qos, r.deadline()) => result,
+                        };
+                        match restored {
+                            Ok(pending) => {
+                                for message in pending {
+                                    if !forward(&mut durable, &cancel, &r, sink.as_ref(), message, true).await {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                tracing::error!(request=%r.name,error=%error,"MQTT subscription could not be restored");
+                                break;
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(request=%r.name,error=%error,"MQTT subscription disconnected");
+                        if !config.reconnect {
+                            break;
+                        }
+                        tokio::select! { _ = cancel.cancelled() => break, _ = tokio::time::sleep(config.reconnect_delay) => {} }
+                    }
+                }
+            }
+            if let Some(durable) = durable.take() {
+                // Send the acknowledgements of what the host has stored, polling so they go out. Messages arriving
+                // meanwhile are not delivered and stay in the broker.
+                let mut acknowledged = durable.finish();
+                let drain = async {
+                    loop {
+                        tokio::select! { _ = &mut acknowledged => break, _ = session.poll() => {} }
+                    }
+                };
+                if tokio::time::timeout(std::time::Duration::from_secs(10), drain)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(request=%r.name,"MQTT stopped before every stored message was acknowledged; the broker delivers them again");
+                }
+            }
+            if shutdown.load(Ordering::Acquire) {
+                // Keep the subscription: the persistent session collects in the broker until the gateway is back.
+                let leave = async {
+                    session.disconnect().await?;
+                    loop {
+                        session.poll().await?;
+                    }
+                    #[allow(unreachable_code)]
+                    Ok::<(), DeviceGatewayError>(())
+                };
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(1), leave).await;
+            } else if cancel.is_cancelled() {
+                // A persistent session must not keep collecting messages after a successful explicit stop.
+                let cleanup = async {
+                    for topic in &topics {
+                        session.unsubscribe(topic).await?;
+                        loop {
+                            match session.poll().await? {
+                                Event::Unsubscribed(true) => break,
+                                Event::Unsubscribed(false) => {
+                                    return Err(DeviceGatewayError::transport("MQTT broker rejected unsubscribe"))
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Ok::<(), DeviceGatewayError>(())
+                };
+                match tokio::time::timeout(std::time::Duration::from_secs(1), cleanup).await {
+                    Ok(Ok(())) => {}
+                    _ => {
+                        tracing::warn!(request=%r.name,"MQTT stopped locally; broker subscription cleanup could not be confirmed")
+                    }
+                }
             }
         }))
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn topic_matching() {
-        assert!(matches_topic("a/+/c", "a/b/c"));
-        assert!(matches_topic("a/#", "a"));
-        assert!(!matches_topic("a/+", "a"));
-        assert!(!matches_topic("#", "$SYS/broker"));
     }
 }

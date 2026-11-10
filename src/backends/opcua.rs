@@ -14,7 +14,7 @@
 
 //! OPC UA sessions and native data-change subscriptions. No writes are replayed.
 use crate::{
-    client::{DeviceClient, SampleSink},
+    device_facade::{DeviceFacade, SampleSink},
     model::*,
 };
 use async_trait::async_trait;
@@ -221,13 +221,12 @@ impl OpcUaDeviceClient {
     }
 }
 #[async_trait]
-impl DeviceClient for OpcUaDeviceClient {
+impl DeviceFacade for OpcUaDeviceClient {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
             write: true,
             subscribe: true,
-            transfer: false,
         }
     }
     async fn execute(
@@ -329,12 +328,20 @@ impl DeviceClient for OpcUaDeviceClient {
             let value = result(&req.items[index].parameter_id, value);
             if let Some(error) = value.error {
                 tracing::error!(request=%req.name,error=%error,"OPC UA sample rejected");
+                let _ = sink.emit(SampleBatch {
+                    request_name: req.name.clone(),
+                    errors: vec![format!("{}: {}", value.parameter_id, error)],
+                    logging: req.logging,
+                    request: Some(req.clone()),
+                    samples: Vec::new(),
+                });
                 return;
             }
             let Some(value_data) = value.value else {
                 return;
             };
             if let Err(error) = sink.emit(SampleBatch {
+                errors: Vec::new(),
                 request_name: req.name.clone(),
                 logging: req.logging,
                 request: Some(req.clone()),

@@ -1,12 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <moqui-conf>
-    <!-- The DeviceGroupMember (DgmpEdgeGateway) Device this gateway is. Set: subscriptions of the controllers in its
-         scope are restored after a start and requests outside its scope are refused; empty: no restoration, no scope. -->
-    <default-property name="device_gateway_device_id" value=""/>
-    <!-- false: this instance does not start the subscriptions (only one instance should own them) -->
-    <default-property name="device_gateway_restore_subscriptions" value="true"/>
-    <!-- Moqui notification after this many seconds of failing stores of a request; false turns it off -->
-    <default-property name="device_gateway_error_notification" value="true"/>
-    <default-property name="device_gateway_error_notification_seconds" value="60"/>
     <tools><tool-factory class="moqui_device_gateway::DeviceGatewayToolFactory" init-priority="30"/></tools>
 </moqui-conf>

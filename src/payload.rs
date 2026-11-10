@@ -186,12 +186,7 @@ pub fn plc_log_batch(r: &PreparedDeviceRequest, bytes: &[u8]) -> Result<SampleBa
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| DeviceGatewayError::invalid("PLC event requires loggerName"))?;
-        // A subscription is scoped to a known Device. It cannot impersonate another one.
-        if device != r.device_id {
-            return Err(DeviceGatewayError::invalid(
-                "PLC loggerName differs from request device",
-            ));
-        }
+        // Keep the sender's exact identity. The host validates it against the request's approved device hierarchy.
         let parameter = event
             .get("source")
             .and_then(Value::as_str)
@@ -239,6 +234,7 @@ pub fn plc_log_batch(r: &PreparedDeviceRequest, bytes: &[u8]) -> Result<SampleBa
         });
     }
     Ok(SampleBatch {
+        errors: Vec::new(),
         request_name: r.name.clone(),
         logging: true,
         request: Some(std::sync::Arc::new(r.clone())),

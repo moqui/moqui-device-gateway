@@ -13,6 +13,60 @@
  */
 
 mod common;
+#[tokio::test]
+async fn concurrent_pollers_have_independent_cancellation_and_shared_shutdown() {
+    let reader = Arc::new(Reader(AtomicUsize::new(0)));
+    let mut facade = DeviceGatewayFacade::new();
+    facade.install(Protocol::ModbusTcp, reader.clone());
+    let facade = Arc::new(facade);
+    let mut first = common::request(Protocol::ModbusTcp, "localhost:502".into(), Operation::Poll);
+    first.name = "first-poller".into();
+    let mut second = first.clone();
+    second.name = "second-poller".into();
+    let start = |request: PreparedDeviceRequest| {
+        let facade = facade.clone();
+        async move {
+            let request = Arc::new(request);
+            facade
+                .execute(
+                    request.clone(),
+                    &RequestInput::default(),
+                    &mut RequestOutput::default(),
+                    request.deadline(),
+                    Some(Arc::new(Sink)),
+                )
+                .await
+        }
+    };
+    let (a, b) = tokio::join!(start(first.clone()), start(second));
+    assert_eq!(a.unwrap(), ExecutionOutcome::Active);
+    assert_eq!(b.unwrap(), ExecutionOutcome::Active);
+    assert_eq!(facade.subscription_names().await.0.len(), 2);
+    let mut stop = first;
+    stop.name = "stop-first".into();
+    stop.operation = Operation::Unsubscribe;
+    stop.parent_request = Some("first-poller".into());
+    let stop = Arc::new(stop);
+    facade
+        .execute(
+            stop.clone(),
+            &RequestInput::default(),
+            &mut RequestOutput::default(),
+            stop.deadline(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(facade.subscription_names().await.0, vec!["second-poller"]);
+    let before = reader.0.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert!(reader.0.load(Ordering::SeqCst) > before);
+    facade.close().await;
+    let closed = reader.0.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(reader.0.load(Ordering::SeqCst), closed);
+}
+
 use async_trait::async_trait;
 use moqui_device_gateway::*;
 use std::{
@@ -24,13 +78,12 @@ use std::{
 };
 struct Reader(AtomicUsize);
 #[async_trait]
-impl DeviceClient for Reader {
+impl DeviceFacade for Reader {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
             write: false,
             subscribe: false,
-            transfer: false,
         }
     }
     async fn execute(
@@ -156,13 +209,12 @@ async fn event_subscription_does_not_silently_become_polling() {
 }
 struct PartialReader;
 #[async_trait]
-impl DeviceClient for PartialReader {
+impl DeviceFacade for PartialReader {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
             write: false,
             subscribe: false,
-            transfer: false,
         }
     }
     async fn execute(
