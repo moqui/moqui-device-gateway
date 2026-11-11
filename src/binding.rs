@@ -155,6 +155,13 @@ fn connection(r: &EntityValue, c: Option<&EntityValue>, device_id: &str) -> Resu
         Protocol::OpcUa
     } else if driver.as_deref() == Some("DcdModbusTCP") || endpoint.starts_with("modbus-tcp://") {
         Protocol::ModbusTcp
+    } else if matches!(driver.as_deref(), Some("DcdLogixCIPEIP" | "DcdEthernetIP"))
+        || endpoint.starts_with("logix://")
+        || endpoint.starts_with("eip://")
+    {
+        Protocol::EthernetIp
+    } else if driver.as_deref() == Some("DcdEtherCAT") || endpoint.starts_with("ethercat://") {
+        Protocol::EtherCat
     } else {
         return Err(Error::new(
             "Unsupported fieldbus protocol; no default backend is selected",
@@ -338,7 +345,12 @@ pub fn prepare(
         .filter(|v| !matches!(v, Value::Null))
         .map(|_| entity(params, "connection"))
         .transpose()?;
-    let mut operation = Operation::from_enum(&text(&r, "requestTypeEnumId").unwrap_or_default()).map_err(error)?;
+    let request_type = text(&r, "requestTypeEnumId").unwrap_or_default();
+    let mut operation = Operation::from_enum(&request_type).map_err(error)?;
+    // A DrtRead with a pollingInterval polls until a DrtUnsubscribe.
+    if operation == Operation::Read && decimal(&r, "pollingInterval")?.is_some() {
+        operation = Operation::Poll;
+    }
     let name = text(&r, "requestName").ok_or_else(|| Error::new("Missing requestName"))?;
     let connection = if operation == Operation::Unsubscribe {
         let parent_name =
@@ -354,10 +366,6 @@ pub fn prepare(
     } else {
         connection(&r, c.as_deref(), &device_id)?
     };
-    // Camel uses MQTT broker subscriptions for all subscription request types, not repeated finite reads.
-    if operation == Operation::Poll && connection.protocol == Protocol::Mqtt {
-        operation = Operation::Subscribe;
-    }
     if service == ServiceKind::PlcLog && connection.protocol != Protocol::Mqtt {
         return Err(Error::new(format!("PLC log request {name} needs an MQTT endpoint")));
     }
@@ -372,6 +380,7 @@ pub fn prepare(
         device_id: device_id.clone(),
         parent_request: text(&r, "parentRequestName"),
         operation,
+        subscription_type: SubscriptionType::from_enum(&request_type),
         connection,
         query: text(&r, "query"),
         items: vec![],
@@ -490,9 +499,9 @@ fn run_request(ec: &ExecutionContext, params: &Parameters, service: ServiceKind)
         if e.may_have_applied {
             ExecutionOutcome::Uncertain
         } else if output
-                .items
-                .iter()
-                .any(|i| matches!(i.status, ItemStatus::Completed | ItemStatus::Unchanged))
+            .items
+            .iter()
+            .any(|i| matches!(i.status, ItemStatus::Completed | ItemStatus::Unchanged))
         {
             ExecutionOutcome::Partial
         } else {
@@ -519,7 +528,10 @@ fn run_request(ec: &ExecutionContext, params: &Parameters, service: ServiceKind)
     } else {
         vec![]
     };
-    let samples = read_samples.iter().map(sample_to_value).collect::<Result<Vec<_>, _>>()?;
+    let samples = read_samples
+        .iter()
+        .map(sample_to_value)
+        .collect::<Result<Vec<_>, _>>()?;
     let stored_count = if read_samples.is_empty() {
         Value::I64(0)
     } else {
@@ -686,7 +698,12 @@ pub(crate) fn notify_inbound(
         "errorMessage".into(),
         error_message.map(Value::string).unwrap_or(Value::Null),
     );
-    call_service(ec, "moqui.device.DeviceAcquisitionServices.notify#InboundState", &params).map(|_| ())
+    call_service(
+        ec,
+        "moqui.device.DeviceAcquisitionServices.notify#InboundState",
+        &params,
+    )
+    .map(|_| ())
 }
 /// What the store did with a batch.
 pub(crate) enum Stored {

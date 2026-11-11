@@ -6,9 +6,20 @@ protocol wraps a native Rust library behind one facade, so that the caller does
 not depend on the protocol, following the
 [PLC4X concepts](https://plc4x.apache.org/plc4x/latest/users/getting-started/general-concepts.html):
 a connection string `{driver code}:{transport code}://{transport config}?{options}`
-and tag addresses `type:address`. Modern fieldbuses only: Modbus TCP, OPC UA and
-MQTT now; EtherNet/IP, PROFINET, EtherCAT, BACnet and Modbus TLS to come. Files
-are not a fieldbus: moqui-device moves them with mr-moqui's resources and SFTP.
+and tag addresses `type:address`. Modern fieldbuses only: Modbus TCP, OPC UA,
+MQTT, EtherNet/IP and EtherCAT now; PROFINET, BACnet and Modbus TLS to come.
+Files are not a fieldbus: moqui-device moves them with mr-moqui's resources and
+SFTP.
+
+| Protocol | Library | Feature | Driver (`DeviceConnection.driverEnumId`) |
+|---|---|---|---|
+| Modbus TCP | [tokio-modbus](https://crates.io/crates/tokio-modbus) 0.17 | `modbus` | `DcdModbusTCP`, `modbus-tcp://` |
+| OPC UA | [async-opcua](https://crates.io/crates/async-opcua) 0.19 | `opcua` | `DcdOpcUa`, `opc.tcp://` |
+| MQTT 3.1.1 / 5 | [rumqttc](https://crates.io/crates/rumqttc) 0.25 | `mqtt` | `DcdMqtt`, `mqtt://`, `mqtts://` |
+| EtherNet/IP (Logix tags) | [rust-ethernet-ip](https://crates.io/crates/rust-ethernet-ip) 1.2 | `ethernetip` | `DcdLogixCIPEIP`, `DcdEthernetIP`, `logix://`, `eip://` |
+| EtherCAT (MainDevice) | [ethercrab](https://crates.io/crates/ethercrab) 0.7 | `ethercat` | `DcdEtherCAT`, `ethercat://` |
+
+All five are default features.
 
 | Branch | Content |
 |---|---|
@@ -33,7 +44,7 @@ driver of the connection and hands the values to moqui-device's
 
 | Part | Content |
 |---|---|
-| `src/backends` | One backend per protocol, each behind its Cargo feature: `mqtt` (rumqttc), `opcua` (async-opcua), `modbus` (tokio-modbus) |
+| `src/backends` | One backend per protocol, each behind its Cargo feature (see the table above) |
 | `src/device_facade.rs` | `DeviceFacade`, the backend contract, and `SampleSink`, where continuous samples go |
 | `src/client.rs` | `DeviceGatewayFacade`, the registry of connections and subscriptions, with one `execute` for every protocol |
 | `src/model.rs`, `src/codec.rs`, `src/payload.rs` | Requests, items, values, scaling and the MQTT payload format |
@@ -43,7 +54,7 @@ driver of the connection and hands the values to moqui-device's
 Without the `moqui` feature nothing of Moqui is linked:
 
 ```sh
-cargo check --no-default-features --features mqtt,opcua,modbus
+cargo check --no-default-features --features mqtt,opcua,modbus,ethernetip,ethercat
 ```
 
 ## Using the facade
@@ -63,16 +74,33 @@ running subscription asked to start again answers `unchanged`, so moqui-device's
 host, such as a PLC runtime on RuSTy, creates the same objects without the
 ToolFactory and supplies its own `SampleSink`.
 
+The `requestTypeEnumId` of a `DeviceRequest` gives the operation:
+
+* `DrtRead` reads once. With a `pollingInterval` it polls: the gateway reads
+  again at every interval until a `DrtUnsubscribe`, and hands each read to the
+  `SampleSink`. Polling is for protocols that cannot subscribe (Modbus), and the
+  usual acquisition on OPC UA.
+* `DrtStateChange`, `DrtCyclic` and `DrtEvent` are the subscription types of
+  PLC4X; `DrtSubscribe` is the default of the protocol. The device sends the
+  values: on a change, every `pollingInterval`, or as events.
+* `DrtWrite` (and `DrtConfigWrite`) writes; `DrtUnsubscribe` ends the
+  subscription or polling of its `parentRequestName`.
+
 | Operation | MQTT 3.1.1 / 5 | OPC UA | Modbus TCP |
 | --- | --- | --- | --- |
-| Read | one message per item topic | typed values, per-node status and source timestamps | coils and typed registers; indexed bulk reads |
-| Write | JSON values or one payload message; QoS 0/1/2 | typed values | coils and registers; grouped bulk writes |
-| Subscribe | broker subscriptions with SUBACK and reconnect | monitored items | no |
-| Poll | as a subscription | at the polling interval | at the polling interval |
-| Unsubscribe | UNSUBSCRIBE, acknowledged | ends the subscription | ends the polling task |
+| `DrtRead` | error: a topic has no value to read | typed values, per-node status and source timestamps | coils and typed registers; indexed bulk reads |
+| `DrtRead` with `pollingInterval` | error | reads at the interval | reads at the interval |
+| `DrtWrite` | JSON values or one payload message; QoS 0/1/2 | typed values | coils and registers; grouped bulk writes |
+| `DrtSubscribe`, `DrtEvent` | broker subscription with SUBACK and reconnect | `DrtSubscribe` as `DrtStateChange`; events are not implemented | error |
+| `DrtStateChange` | as `DrtSubscribe` | monitored items, reported on change | error |
+| `DrtCyclic` | error: a broker sends each message | monitored items sampled every `pollingInterval` | error |
+| `DrtUnsubscribe` | UNSUBSCRIBE, acknowledged | ends the subscription or polling | ends the polling |
 
-Browse/discovery, structured OPC UA values and Modbus TLS are not implemented.
-An unsupported request is an error; there is no fallback protocol.
+EtherNet/IP and EtherCAT are read, written and polled like Modbus TCP: a
+subscription type on them is an error.
+
+Browse/discovery, structured OPC UA values, OPC UA events and Modbus TLS are not
+implemented. An unsupported request is an error; there is no fallback protocol.
 
 All timeouts and polling intervals are milliseconds. One deadline covers session
 acquisition and all items. A timed-out write is `uncertain` and is never resent
@@ -97,6 +125,29 @@ setpoint by the target device; QoS 0 only confirms local transmission.
   `pkiDir`, `certificateFile`, `privateKeyFile`, `applicationUri`. Secure modes
   require client credentials and pretrusted server certificates; username
   authentication requires `SignAndEncrypt`.
+* EtherNet/IP: endpoint `logix://host` or `eip://host` (port 44818 by default),
+  option `slot=0` for the backplane slot of the controller. CIP explicit
+  messaging to the symbolic tags of Allen-Bradley Logix controllers
+  (CompactLogix, ControlLogix), as the PLC4X `logix` driver: the address is the
+  tag name as the controller knows it (`Motor_Speed`, `Line[3]`,
+  `Recipe.Temperature`, `Program:Main.Counter`), and the item type gives the CIP
+  type of a write (`DritDInt` is DINT, `DritReal` REAL, ...). Atomic types and
+  STRING; a UDT is read and written member by member. Implicit (class 1) I/O
+  connections are not implemented.
+* EtherCAT: endpoint `ethercat://eth0`, the raw Ethernet interface of the
+  segment; option `cycle-time-us` (default 2000). This host is the MainDevice:
+  the first request on an interface discovers the SubDevices, brings them to OP
+  and exchanges the process data every cycle in a thread of its own, until the
+  host closes. An address is `input:SUBDEVICE:BYTE:TYPE` or
+  `output:SUBDEVICE:BYTE:TYPE`, the SubDevice by its position on the segment (0
+  is the first), the byte offset in its process data, little-endian; a BOOL is a
+  bit, `input:1:0.3:BOOL`. A read takes the image of the last cycle and fails
+  while a SubDevice is not in OP; a write changes the outputs and completes once
+  two cycles have sent them. Only outputs are written. The mapping (PDOs) is the
+  default of each SubDevice; SDO configuration and distributed clocks are not
+  exposed. A raw socket needs `CAP_NET_RAW` (or root) on Linux, and the cycle is
+  as regular as the operating system makes an ordinary thread: no hard
+  real-time.
 
 Unknown protocol options are rejected rather than ignored.
 
@@ -124,17 +175,39 @@ the broker close the connection and deliver the unacknowledged messages again.
 Prefer MQTT 5 for durable subscriptions.
 
 Polling and OPC UA samples have no broker behind them: a sink that is full
-rejects them.
+rejects and logs them. The sample worker keeps and retries the batches it has
+taken while the database does not answer.
+
+A store failure and its recovery are Moqui notifications
+(`DeviceInboundFailed`, `DeviceInboundRecovered`) and log entries. A notification
+needs the database, so one about a database outage is sent after it recovers; it
+is not an independent alarm channel.
 
 For ActiveMQ Artemis: `persistence-enabled` true, an `address-full-policy` of
 `PAGE` for the MQTT addresses with paging sized for the longest outage,
 `session-expiry-seconds` at least that outage (default 86400), and publishers at
 QoS 1 or 2.
 
+## Values and writes
+
+* Numeric conversions use Decimal; zero bounds and zero significant digits are
+  meaningful, a zero scaling is rejected. An out-of-range write, or a fractional
+  write to an integer physical type, fails instead of truncating.
+* Modbus indexed bulk items share one response. A bulk write needs complete,
+  unique indices for each array and sends one ordered PDU per bulk address. All
+  values and PDU limits are checked before connecting.
+* A write is never sent again by the library: a timed-out write is `uncertain`,
+  retrying it is the caller's decision, and the receiver must be idempotent.
+* An explicit MQTT unsubscribe sends an acknowledged UNSUBSCRIBE for every topic.
+  With the broker unavailable, a persistent remote subscription can remain.
+* MQTT TLS with a private CA or client certificates, and secured OPC UA, need
+  tests on the installation; OPC UA rejects untrusted certificates and deprecated
+  security policies.
+
 ## Further protocols
 
-PROFINET, EtherNet/IP, EtherCAT and the other `DeviceConnectionDriver` values
-are not implemented yet. `DeviceFacade` is the extension point; choosing a
+PROFINET, BACnet and the other `DeviceConnectionDriver` values are not
+implemented yet. `DeviceFacade` is the extension point; choosing a
 library requires checking its role (controller/device), licensing, supported
 services and hardware requirements. Do not infer support from an enumeration or
 a protocol name.
@@ -157,11 +230,22 @@ cargo test
 ```
 
 The service tests (`test/DeviceGateway.spec.js`) need moqui-math and moqui-device
-installed. `scripts/run-driver-tests.py` starts local Modbus, OPC UA and MQTT
-peers (Docker images `apache/activemq-artemis` and `atmoz/sftp:alpine`, the OPC UA
-server of `examples/opcua_test_server.rs`, a Modbus peer) and runs the suites of
-moqui-device and of this component with every feature;
-`scripts/run-acceptance.py` adds broker loss, a database crash and stall, and a
-restart (`acceptance/GatewayRecovery.spec.js`). Neither stops an existing broker
-or database. See [validation](docs/validation.md) for
-earlier results.
+installed. `scripts/run-driver-tests.py` starts local peers (Docker images
+`apache/activemq-artemis` and `atmoz/sftp:alpine`, which it does not pull, the OPC
+UA server of `examples/opcua_test_server.rs`, a Modbus peer) and runs the suites
+of moqui-device and of this component with every feature. With `CPPPO_PYTHON`
+naming a Python that has [cpppo](https://pypi.org/project/cpppo/), it also
+starts cpppo's Logix simulator and runs the EtherNet/IP feature; `cargo test`
+runs the EtherNet/IP round trip when `GATEWAY_EIP_ENDPOINT` names one. EtherCAT
+needs a segment on a raw interface, which no runner provides: its tests cover the
+addresses, the process data image and an interface that cannot be opened, not
+the cycle on real SubDevices.
+
+`scripts/run-acceptance.py` (Linux, opt-in) runs `acceptance/GatewayRecovery.spec.js`:
+broker stop and start, a cut of the gateway-broker link, a PostgreSQL crash, a
+paused database under a 2200-message burst, a 1000-message persistence run, and
+the restoration of subscriptions in a second host process, with messages
+published while no gateway ran. Nothing may be lost or stored twice. It controls
+only its own broker and database and keeps logs and metrics under the printed
+temporary path. Physical devices, timing bounds and failover between hosts are
+not covered by either runner.

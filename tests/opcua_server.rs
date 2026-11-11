@@ -189,8 +189,25 @@ async fn write_publishes_the_parameter_value_to_the_server_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn subscription_delivers_live_node_updates() {
+    live_node_updates(Operation::Subscribe, SubscriptionType::ChangeOfState).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cyclic_subscription_delivers_live_node_updates() {
+    live_node_updates(Operation::Subscribe, SubscriptionType::Cyclic).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn polling_delivers_live_node_updates() {
+    live_node_updates(Operation::Poll, SubscriptionType::ChangeOfState).await;
+}
+
+async fn live_node_updates(operation: Operation, subscription_type: SubscriptionType) {
     let server = TestServer::start().await;
-    let r = server.request(Operation::Subscribe);
+    let mut r = (*server.request(operation)).clone();
+    r.subscription_type = subscription_type;
+    r.polling_interval = Duration::from_millis(100);
+    let r = Arc::new(r);
     let f = Arc::new(DeviceGatewayFacade::new());
     let sink = Arc::new(VecSink(Mutex::new(Vec::new())));
     let mut out = RequestOutput::default();
@@ -218,6 +235,9 @@ async fn subscription_delivers_live_node_updates() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(seen, "the subscription did not deliver the new node value");
+    assert!(
+        seen,
+        "{operation:?} {subscription_type:?} did not deliver the new node value"
+    );
     f.close().await;
 }

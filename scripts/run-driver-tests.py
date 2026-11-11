@@ -11,7 +11,8 @@
 # along with this software (see the LICENSE.md file). If not, see
 # <http://creativecommons.org/publicdomain/zero/1.0/>.
 
-"""Own local Modbus/OPC UA/SFTP peers; never stops an existing broker or database."""
+"""Own local Modbus/OPC UA/SFTP peers, and an EtherNet/IP Logix simulator when CPPPO_PYTHON names a Python with cpppo;
+never stops an existing broker or database."""
 import json
 import os
 import pathlib
@@ -61,8 +62,16 @@ def main():
     if build.returncode: raise RuntimeError("OPC UA example build failed; see server-build.log")
     server=subprocess.Popen([str(FRAMEWORK/"target/debug/examples/opcua_test_server"),"12686",str(ROOT/"server-pki")],
         stdout=(ROOT/"opcua.log").open("w"),stderr=subprocess.STDOUT)
+    eip=None
     try:
         ready(12686)
+        cpppo=os.environ.get("CPPPO_PYTHON")
+        if cpppo:
+            with socket.socket() as s: s.bind(("127.0.0.1",0)); eip_port=s.getsockname()[1]
+            eip=subprocess.Popen([cpppo,"-m","cpppo.server.enip","--address","127.0.0.1:"+str(eip_port),"Speed=DINT","Temp=REAL","Level=INT"],
+                stdout=(ROOT/"cpppo.log").open("w"),stderr=subprocess.STDOUT)
+            ready(eip_port)
+            environment.update(gateway_eip_endpoint="logix://127.0.0.1:"+str(eip_port))
         upload=ROOT/"upload"; upload.mkdir()
         run("docker","run","--pull=never","--name",SFTP,"--label","moqui.gateway.acceptance="+str(os.getpid()),"-d",
             "-p","127.0.0.1:2223:22","-v",str(upload)+":/home/foo/upload","atmoz/sftp:alpine","foo:pass:::upload")
@@ -86,6 +95,7 @@ def main():
             if result.returncode: raise RuntimeError("Driver round-trip tests failed")
             peer.shutdown(); thread.join(timeout=5)
     finally:
+        if eip: eip.terminate(); eip.wait(timeout=20)
         server.terminate()
         try: server.wait(timeout=20)
         except subprocess.TimeoutExpired: server.kill(); server.wait()
@@ -93,6 +103,8 @@ def main():
 if __name__ == "__main__":
     try: main()
     finally:
+        with (ROOT/"broker.log").open("w") as log:
+            subprocess.run(["docker","logs",BROKER],stdout=log,stderr=subprocess.STDOUT,timeout=30)
         subprocess.run(["docker","rm","-f","-v",SFTP],capture_output=True,timeout=30)
         subprocess.run(["docker","rm","-f","-v",BROKER],capture_output=True,timeout=30)
         print("Artifacts retained at "+str(ROOT),flush=True)

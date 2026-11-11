@@ -71,6 +71,16 @@ impl DeviceGatewayFacade {
             Protocol::OpcUa,
             Arc::new(crate::backends::opcua::OpcUaDeviceClient::default()),
         );
+        #[cfg(feature = "ethernetip")]
+        facade.install(
+            Protocol::EthernetIp,
+            Arc::new(crate::backends::ethernetip::EthernetIpDeviceClient::default()),
+        );
+        #[cfg(feature = "ethercat")]
+        facade.install(
+            Protocol::EtherCat,
+            Arc::new(crate::backends::ethercat::EtherCatDeviceClient::default()),
+        );
         facade
     }
     pub fn install(&mut self, protocol: Protocol, client: Arc<dyn DeviceFacade>) {
@@ -131,8 +141,16 @@ impl DeviceGatewayFacade {
             .ok_or_else(|| DeviceGatewayError::unsupported("Protocol is not compiled into this component"))?;
         let cap = client.capabilities();
         match request.operation {
-            Operation::Read if !cap.read => return Err(DeviceGatewayError::unsupported("Backend cannot read")),
+            Operation::Read | Operation::Poll if !cap.read => {
+                return Err(DeviceGatewayError::unsupported(format!(
+                    "{:?} cannot read or poll: subscribe to its values",
+                    request.connection.protocol
+                )))
+            }
             Operation::Write if !cap.write => return Err(DeviceGatewayError::unsupported("Backend cannot write")),
+            Operation::Subscribe if !cap.subscribe => {
+                return Err(DeviceGatewayError::unsupported("Backend cannot subscribe"))
+            }
             _ => {}
         }
         if matches!(request.operation, Operation::Poll | Operation::Subscribe) {

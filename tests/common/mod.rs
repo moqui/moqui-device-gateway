@@ -21,6 +21,7 @@ pub fn request(protocol: Protocol, endpoint: String, operation: Operation) -> Pr
         device_id: "test-device".into(),
         parent_request: None,
         operation,
+        subscription_type: Default::default(),
         connection: Connection {
             name: "test-connection".into(),
             protocol,

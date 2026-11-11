@@ -140,19 +140,34 @@ async fn rejected_puback_cannot_report_success() {
     f.close().await;
 }
 #[tokio::test]
-async fn read_handles_retained_message_before_suback() {
-    let (ep, server) = broker(false, false).await;
-    let r = request(ep, Operation::Read);
+async fn a_topic_cannot_be_read_polled_or_subscribed_cyclically() {
     let f = Arc::new(DeviceGatewayFacade::new());
-    let mut out = RequestOutput::default();
-    assert_eq!(
-        f.execute(r.clone(), &RequestInput::default(), &mut out, r.deadline(), None)
+    let sink: Arc<dyn SampleSink> = Arc::new(HeldSink::default());
+    for (operation, subscription_type) in [
+        (Operation::Read, SubscriptionType::ChangeOfState),
+        (Operation::Poll, SubscriptionType::ChangeOfState),
+        (Operation::Subscribe, SubscriptionType::Cyclic),
+    ] {
+        let mut r = common::request(Protocol::Mqtt, "mqtt://127.0.0.1:9".into(), operation);
+        r.subscription_type = subscription_type;
+        let r = Arc::new(r);
+        let mut out = RequestOutput::default();
+        let error = f
+            .execute(
+                r.clone(),
+                &RequestInput::default(),
+                &mut out,
+                r.deadline(),
+                Some(sink.clone()),
+            )
             .await
-            .unwrap(),
-        ExecutionOutcome::Completed
-    );
-    assert_eq!(out.items[0].value, Some(FieldValue::Decimal(u64::MAX.into())));
-    server.await.unwrap();
+            .unwrap_err();
+        assert_eq!(
+            error.kind,
+            ErrorKind::Unsupported,
+            "{operation:?} {subscription_type:?}"
+        );
+    }
     f.close().await;
 }
 #[tokio::test]

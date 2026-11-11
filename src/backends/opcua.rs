@@ -317,6 +317,17 @@ impl DeviceFacade for OpcUaDeviceClient {
         if nodes.is_empty() {
             return Err(DeviceGatewayError::invalid("OPC UA subscription has no items"));
         }
+        if r.subscription_type == SubscriptionType::Event {
+            return Err(DeviceGatewayError::unsupported(
+                "OPC UA events are not implemented: use DrtStateChange, DrtSubscribe or DrtCyclic",
+            ));
+        }
+        // A cyclic subscription samples each item at the polling interval; a change of state lets the server sample
+        // at its fastest rate and report the changes.
+        let sampling_interval = match r.subscription_type {
+            SubscriptionType::Cyclic => r.polling_interval.as_secs_f64() * 1000.0,
+            _ => 0.0,
+        };
         // A subscription owns a dedicated session, so cancellation cannot affect other requests.
         let guard = connect(&r, deadline).await?;
         let req = r.clone();
@@ -372,7 +383,10 @@ impl DeviceFacade for OpcUaDeviceClient {
                 MonitoredItemCreateRequest::new(
                     ReadValueId::from(n),
                     MonitoringMode::Reporting,
-                    MonitoringParameters::default(),
+                    MonitoringParameters {
+                        sampling_interval,
+                        ..Default::default()
+                    },
                 )
             })
             .collect::<Vec<_>>();

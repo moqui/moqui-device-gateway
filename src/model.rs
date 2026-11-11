@@ -101,15 +101,37 @@ pub enum Operation {
     Unsubscribe,
 }
 impl Operation {
+    /// The operation of a request type. A `DrtRead` is a single read; the host makes it a [`Self::Poll`] when the
+    /// request has a polling interval. The three subscription types are those of PLC4X.
     pub fn from_enum(value: &str) -> Result<Self, DeviceGatewayError> {
         Ok(match value {
             "DrtRead" => Self::Read,
             "DrtWrite" | "DrtConfigWrite" => Self::Write,
-            "DrtSubscribe" | "DrtEvent" | "DrtStateChange" => Self::Subscribe,
-            "DrtCyclic" => Self::Poll,
+            "DrtSubscribe" | "DrtEvent" | "DrtStateChange" | "DrtCyclic" => Self::Subscribe,
             "DrtUnsubscribe" => Self::Unsubscribe,
             _ => return Err(DeviceGatewayError::unsupported("Unsupported DeviceRequest type")),
         })
+    }
+}
+/// What makes a subscription send a value, as the PLC4X subscription types: `DrtStateChange` (and the generic
+/// `DrtSubscribe`), `DrtCyclic` and `DrtEvent`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SubscriptionType {
+    /// A value that changes, which the device samples at its own rate.
+    #[default]
+    ChangeOfState,
+    /// A value sampled at the request's polling interval.
+    Cyclic,
+    /// An event or a message.
+    Event,
+}
+impl SubscriptionType {
+    pub fn from_enum(value: &str) -> Self {
+        match value {
+            "DrtCyclic" => Self::Cyclic,
+            "DrtEvent" => Self::Event,
+            _ => Self::ChangeOfState,
+        }
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,6 +139,10 @@ pub enum Protocol {
     ModbusTcp,
     Mqtt,
     OpcUa,
+    /// EtherNet/IP with the CIP services of Logix controllers: symbolic tags (PLC4X `logix`, `eip`).
+    EthernetIp,
+    /// An EtherCAT segment on a raw Ethernet interface, this host as its MainDevice.
+    EtherCat,
 }
 #[derive(Clone, Default)]
 pub struct Credentials {
@@ -151,7 +177,7 @@ impl fmt::Debug for Connection {
 }
 impl Connection {
     /// The key includes credentials but is never exposed through Debug or diagnostics.
-    #[cfg(any(feature = "modbus", feature = "opcua"))]
+    #[cfg(any(feature = "modbus", feature = "opcua", feature = "ethernetip"))]
     pub(crate) fn session_key(&self) -> String {
         format!(
             "{:?}\0{}\0{:?}\0{:?}\0{:?}",
@@ -182,6 +208,8 @@ pub struct PreparedDeviceRequest {
     pub device_id: String,
     pub parent_request: Option<String>,
     pub operation: Operation,
+    /// For [`Operation::Subscribe`].
+    pub subscription_type: SubscriptionType,
     pub connection: Connection,
     pub query: Option<String>,
     pub items: Vec<Item>,

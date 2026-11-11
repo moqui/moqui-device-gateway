@@ -21,7 +21,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::{
-    collections::BTreeMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -311,8 +310,9 @@ impl DeviceFacade for MqttDeviceClient {
     }
 
     fn capabilities(&self) -> Capabilities {
+        // A topic has no value to read: a DrtRead, and so polling, is an error; subscribe to the topic instead.
         Capabilities {
-            read: true,
+            read: false,
             write: true,
             subscribe: true,
         }
@@ -359,21 +359,9 @@ impl DeviceFacade for MqttDeviceClient {
                 }
             }
         } else {
-            let pending = subscribe_topics(&mut session, &topics(r)?, config.qos, deadline).await?;
-            let mut received = BTreeMap::new();
-            for (topic, bytes, _) in pending {
-                for item in values(r, &topic, &bytes)? {
-                    received.insert(item.parameter_id.clone(), item);
-                }
-            }
-            while received.len() < r.items.len() {
-                if let Event::Message(topic, bytes, _) = poll(&mut session, deadline, false).await? {
-                    for item in values(r, &topic, &bytes)? {
-                        received.insert(item.parameter_id.clone(), item);
-                    }
-                }
-            }
-            out.items.extend(received.into_values());
+            return Err(DeviceGatewayError::unsupported(
+                "MQTT has no read: subscribe to the topic (DrtSubscribe or DrtEvent)",
+            ));
         }
         Ok(())
     }
@@ -385,6 +373,11 @@ impl DeviceFacade for MqttDeviceClient {
         cancel: CancellationToken,
         deadline: Instant,
     ) -> Result<tokio::task::JoinHandle<()>, DeviceGatewayError> {
+        if r.subscription_type == SubscriptionType::Cyclic {
+            return Err(DeviceGatewayError::unsupported(
+                "MQTT has no cyclic subscription: a broker sends each message (DrtSubscribe or DrtEvent)",
+            ));
+        }
         let config = Settings::parse(&r)?;
         let mut session = Session::new(&r, &config)?;
         let topics = topics(&r)?;

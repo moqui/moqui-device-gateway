@@ -12,6 +12,10 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
+#[cfg(feature = "ethercat")]
+pub mod ethercat;
+#[cfg(feature = "ethernetip")]
+pub mod ethernetip;
 #[cfg(feature = "modbus")]
 pub mod modbus;
 #[cfg(feature = "mqtt")]

@@ -25,6 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         device_id: "configured-device-id".into(),
         parent_request: None,
         operation: Operation::Read,
+        subscription_type: Default::default(),
         connection: Connection {
             name: "field-connection".into(),
             protocol: Protocol::ModbusTcp,

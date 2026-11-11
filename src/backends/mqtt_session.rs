@@ -371,7 +371,12 @@ impl Session {
                 Ok(rumqttc::Event::Incoming(rumqttc::Packet::PubAck(_) | rumqttc::Packet::PubComp(_)))
                 | Ok(rumqttc::Event::Outgoing(Outgoing::Publish(0))) => Ok(Event::Published(true)),
                 Ok(_) => Ok(Event::Other),
-                Err(_) => Err(DeviceGatewayError::transport("MQTT connection failed")),
+                Err(error) => {
+                    tracing::debug!(error=%error, "MQTT connection failed");
+                    Err(DeviceGatewayError::transport(format!(
+                        "MQTT connection failed: {error}"
+                    )))
+                }
             },
             Self::V5(_, events) => match events.poll().await {
                 Ok(v5::Event::Incoming(Packet::ConnAck(_))) => Ok(Event::Connected),
@@ -405,7 +410,12 @@ impl Session {
                 }
                 Ok(v5::Event::Outgoing(Outgoing::Publish(0))) => Ok(Event::Published(true)),
                 Ok(_) => Ok(Event::Other),
-                Err(_) => Err(DeviceGatewayError::transport("MQTT connection failed")),
+                Err(error) => {
+                    tracing::debug!(error=%error, "MQTT connection failed");
+                    Err(DeviceGatewayError::transport(format!(
+                        "MQTT connection failed: {error}"
+                    )))
+                }
             },
         }
     }

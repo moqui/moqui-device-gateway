@@ -55,6 +55,9 @@ mod native {
             "moqui_device_gateway::binding::run_device_gateway_request",
             run_device_gateway_request,
         )?;
-        registry.service_function("moqui_device_gateway::binding::run_plc_log_request", run_plc_log_request)
+        registry.service_function(
+            "moqui_device_gateway::binding::run_plc_log_request",
+            run_plc_log_request,
+        )
     }
 }
