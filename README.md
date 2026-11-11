@@ -24,7 +24,6 @@ All five are default features.
 | Branch | Content |
 |---|---|
 | `main` | The Quarkus/Camel standalone gateway |
-| `old-mr-moqui` | The first standalone Rust rewrite, kept for reference |
 | `mr-moqui` | This driver library |
 
 The core knows connections, addresses and values, not Moqui. Under the `moqui`
