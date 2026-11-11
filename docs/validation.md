@@ -121,7 +121,6 @@ remain observable errors under the existing model constraints.
 
 ## Deployment Boundary
 
-See [migration](migration.md) for preview/apply/rollback. No production database
-or old source repository is changed by these runners. Physical-device validation,
+No production database or old source repository is changed by these runners. Physical-device validation,
 credential-provider completion, secured deployments, golden output comparisons
 and any new protocol adapters remain distinct gates.
