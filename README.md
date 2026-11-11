@@ -1,8 +1,14 @@
 # moqui-device-gateway
 
 Field communication drivers in Rust for [mr-moqui](https://github.com/moqui/mr-moqui)
-and for any other Rust host. Each protocol wraps a native Rust library behind
-one facade, as `FieldbusClient` of moqui-plc4j (or PLC4J itself) did on the JVM.
+and for any other Rust host: the role PLC4X and moqui-plc4j had on the JVM. Each
+protocol wraps a native Rust library behind one facade, so that the caller does
+not depend on the protocol, following the
+[PLC4X concepts](https://plc4x.apache.org/plc4x/latest/users/getting-started/general-concepts.html):
+a connection string `{driver code}:{transport code}://{transport config}?{options}`
+and tag addresses `type:address`. Modern fieldbuses only: Modbus TCP, OPC UA and
+MQTT now; EtherNet/IP, PROFINET, EtherCAT, BACnet and Modbus TLS to come. Files
+are not a fieldbus: moqui-device moves them with mr-moqui's resources and SFTP.
 
 | Branch | Content |
 |---|---|
@@ -10,14 +16,18 @@ one facade, as `FieldbusClient` of moqui-plc4j (or PLC4J itself) did on the JVM.
 | `old-mr-moqui` | The first standalone Rust rewrite, kept for reference |
 | `mr-moqui` | This driver library |
 
-The library knows connections, addresses and values, not Moqui entities or
-services. The services that run a `DeviceRequest` on these drivers, store the
-values and notify the users are those of
-[moqui-device](https://github.com/moqui/moqui-device/tree/mr-moqui), which
-depends on this component: `DeviceServices.run#DeviceRequest`,
-`FieldbusServices` and `DeviceGatewayServices`. Files and SFTP are not drivers
-here: moqui-device writes them with the resource facade and the framework's
-`SftpClient`.
+The core knows connections, addresses and values, not Moqui. Under the `moqui`
+feature the component has one service, as moqui-plc4j had `run#Plc4jRequest`:
+`moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest`, the
+implementation of `moqui.device.DeviceServices.run#DeviceRequestInternal`
+([moqui-device](https://github.com/moqui/moqui-device/tree/mr-moqui), which this
+component depends on). A `DeviceRequest` names it in `runServiceName`; it turns
+the request, its connection and items into a facade request, runs it on the
+driver of the connection and hands the values to moqui-device's
+`DeviceAcquisitionServices.store#Samples`, which owns the persistence.
+`run#PlcLogRequest` subscribes to the log events of a moqui-plc PLC over MQTT.
+`data/DeviceGatewayTestData.xml` and `DeviceGatewayDemoData.xml` set the
+`runServiceName` of moqui-device's fieldbus requests.
 
 ## Structure
 
@@ -27,7 +37,8 @@ here: moqui-device writes them with the resource facade and the framework's
 | `src/device_facade.rs` | `DeviceFacade`, the backend contract, and `SampleSink`, where continuous samples go |
 | `src/client.rs` | `DeviceGatewayFacade`, the registry of connections and subscriptions, with one `execute` for every protocol |
 | `src/model.rs`, `src/codec.rs`, `src/payload.rs` | Requests, items, values, scaling and the MQTT payload format |
-| `src/tool.rs` | Feature `moqui`: `DeviceGatewayToolFactory` (tool `DeviceGateway`), one facade and its Tokio runtime for MR-Moqui |
+| `src/tool.rs` | Feature `moqui`: `DeviceGatewayToolFactory` (tool `DeviceGateway`): one facade, its Tokio runtime, and the queue whose worker hands continuous samples to moqui-device |
+| `src/binding.rs`, `src/notifier.rs` | Feature `moqui`: `run#DeviceGatewayRequest` and `run#PlcLogRequest`, the notice of samples that fail to store |
 
 Without the `moqui` feature nothing of Moqui is linked:
 
@@ -45,11 +56,12 @@ and the independent host in `examples/rusty-host`, which reads a Modbus register
 without a Moqui runtime or database.
 
 A host creates one facade with a Tokio runtime. In MR-Moqui the
-`DeviceGatewayToolFactory` does it (`MoquiConf.xml`, init-priority 30) and
-moqui-device takes it with
-`get_tool_factory_typed::<DeviceGatewayToolFactory>("DeviceGateway")`; its
-`destroy` closes the connections and subscriptions. A future host, such as a
-PLC runtime on RuSTy, creates the same objects without the ToolFactory.
+`DeviceGatewayToolFactory` does it (`MoquiConf.xml`, init-priority 30); its
+`destroy` closes the connections and subscriptions, then the sample worker. A
+running subscription asked to start again answers `unchanged`, so moqui-device's
+`start#Subscriptions` can ask for every subscription that should run. A future
+host, such as a PLC runtime on RuSTy, creates the same objects without the
+ToolFactory and supplies its own `SampleSink`.
 
 | Operation | MQTT 3.1.1 / 5 | OPC UA | Modbus TCP |
 | --- | --- | --- | --- |
@@ -144,8 +156,12 @@ crates. Rust 1.99 or later is required.
 cargo test
 ```
 
-The MQTT tests use a broker on 127.0.0.1:1883 when one is running. The service
-tests on these drivers, with local Modbus, OPC UA, MQTT and SFTP peers, are those
-of moqui-device: `scripts/run-fieldbus-tests.py` and `scripts/run-acceptance.py`
-there. See [validation](docs/validation.md) and the
-[software merge gate report](docs/completion-2026-11-09.md) for earlier results.
+The service tests (`test/DeviceGateway.spec.js`) need moqui-math and moqui-device
+installed. `scripts/run-driver-tests.py` starts local Modbus, OPC UA and MQTT
+peers (Docker images `apache/activemq-artemis` and `atmoz/sftp:alpine`, the OPC UA
+server of `examples/opcua_test_server.rs`, a Modbus peer) and runs the suites of
+moqui-device and of this component with every feature;
+`scripts/run-acceptance.py` adds broker loss, a database crash and stall, and a
+restart (`acceptance/GatewayRecovery.spec.js`). Neither stops an existing broker
+or database. See [validation](docs/validation.md) for
+earlier results.

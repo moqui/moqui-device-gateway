@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <moqui-conf>
+    <!-- Moqui notification after this many seconds of failing stores of a request; false turns it off -->
+    <default-property name="device_gateway_error_notification" value="true"/>
+    <default-property name="device_gateway_error_notification_seconds" value="60"/>
     <tools><tool-factory class="moqui_device_gateway::DeviceGatewayToolFactory" init-priority="30"/></tools>
 </moqui-conf>

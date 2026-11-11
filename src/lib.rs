@@ -18,12 +18,17 @@
 //! [`DeviceGatewayFacade`] is the registry of their connections and subscriptions and gives them one API:
 //! execute a read, write, subscription or unsubscription, with continuous samples delivered to a [`SampleSink`].
 //! Any Rust host creates one with a Tokio runtime. Under the `moqui` feature, [`DeviceGatewayToolFactory`] holds one
-//! for MR-Moqui; the services, persistence and notifications are those of moqui-device.
+//! for MR-Moqui, and `binding` implements the service run#DeviceGatewayRequest (service/moqui/device/gateway), as
+//! moqui-plc4j's run#Plc4jRequest did; the persistence and notifications are those of moqui-device.
 pub mod backends;
+#[cfg(feature = "moqui")]
+pub mod binding;
 pub mod client;
 pub mod codec;
 pub mod device_facade;
 pub mod model;
+#[cfg(feature = "moqui")]
+mod notifier;
 pub mod payload;
 #[cfg(feature = "moqui")]
 pub mod tool;
@@ -44,6 +49,12 @@ mod native {
     fn register(registry: &mut NativeRegistry) -> Result<(), Error> {
         registry.tool("moqui_device_gateway::DeviceGatewayToolFactory", || {
             std::sync::Arc::new(crate::tool::DeviceGatewayToolFactory::default())
-        })
+        })?;
+        use crate::binding::*;
+        registry.service_function(
+            "moqui_device_gateway::binding::run_device_gateway_request",
+            run_device_gateway_request,
+        )?;
+        registry.service_function("moqui_device_gateway::binding::run_plc_log_request", run_plc_log_request)
     }
 }

@@ -146,11 +146,10 @@ impl DeviceGatewayFacade {
                 .await
                 .get(&request.name)
                 .is_some_and(|existing| !existing.task.is_finished());
+            // Starting a running subscription again changes nothing: a restoration can ask for every subscription
+            // that should run. Unsubscribe before replacing one.
             if running {
-                return Err(DeviceGatewayError::new(
-                    ErrorKind::Busy,
-                    "Request is already active; unsubscribe before replacing it",
-                ));
+                return Ok(ExecutionOutcome::Unchanged);
             }
             let cancel = CancellationToken::new();
             let task = if request.operation == Operation::Subscribe && cap.subscribe {

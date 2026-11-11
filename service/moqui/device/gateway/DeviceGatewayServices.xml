@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+This software is in the public domain under CC0 1.0 Universal plus a
+Grant of Patent License.
+
+To the extent possible under law, the author(s) have dedicated all
+copyright and related and neighboring rights to this software to the
+public domain worldwide. This software is distributed without any
+warranty.
+
+You should have received a copy of the CC0 Public Domain Dedication
+along with this software (see the LICENSE.md file). If not, see
+<http://creativecommons.org/publicdomain/zero/1.0/>.
+-->
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- The implementations of moqui.device.DeviceServices.run#DeviceRequestInternal on the drivers of this component,
+         as moqui-plc4j's Plc4jServices.run#Plc4jRequest was on PLC4J. The values read or received are stored by the
+         services of moqui-device (DeviceAcquisitionServices). -->
+
+    <service verb="run" noun="DeviceGatewayRequest" type="rust" location="moqui_device_gateway::binding::run_device_gateway_request"
+            authenticate="false" transaction="ignore">
+        <description>
+            Runs a DeviceRequest on the driver of its connection: DeviceConnection.driverEnumId (DcdMqtt, DcdOpcUa,
+            DcdModbusTCP, etc.), else the scheme of DeviceRequest.brokerUri or DeviceConnection.transportConfig (mqtt://,
+            mqtts://, paho-mqtt5:?brokerUrl=..., opc.tcp://, modbus-tcp://). Set it as DeviceRequest.runServiceName, as
+            moqui.plc4j.Plc4jServices.run#Plc4jRequest was; moqui.device.DeviceServices.run#DeviceRequest calls it.
+
+            DrtRead reads the items and stores the values (DeviceAcquisitionServices.store#Samples). DrtWrite writes the values of the item
+            Parameters; an MQTT write without items publishes the payload parameter as JSON on DeviceRequest.query.
+            DrtSubscribe, DrtEvent and DrtStateChange subscribe, DrtCyclic polls at pollingInterval (an MQTT DrtCyclic
+            subscribes); what arrives is stored through the sample queue. DrtUnsubscribe stops the subscription of
+            parentRequestName.
+
+            The item address is DeviceRequestItem.query, else DeviceRequest.query: an MQTT topic, an OPC UA node id, a
+            Modbus register. With the property device_gateway_device_id set, a device outside the scope of that gateway
+            is refused (DeviceAcquisitionServices.get#GatewayScope).
+        </description>
+        <implements service="moqui.device.DeviceServices.run#DeviceRequestInternal"/>
+        <in-parameters>
+            <parameter name="payload" type="Map"><description>The message of an MQTT write without items.</description></parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="status"><description>completed, partial, active, failed, uncertain or unchanged.</description></parameter>
+            <parameter name="samples" type="List"><description>The values read.</description></parameter>
+            <parameter name="storedCount" type="Long"/>
+            <parameter name="itemResults" type="List"><description>Maps: parameterId, status, value, error.</description></parameter>
+            <parameter name="subscriptionId"/>
+            <parameter name="errorMessage"/>
+        </out-parameters>
+    </service>
+
+    <service verb="run" noun="PlcLogRequest" type="rust" location="moqui_device_gateway::binding::run_plc_log_request"
+            authenticate="false" transaction="ignore">
+        <description>
+            PLC log events over MQTT: a DrtSubscribe or DrtEvent request whose topic (DeviceRequest.query) carries the log
+            events of the moqui-plc LoggerFacade. An event with a source is stored as a ParameterLog of that Parameter, an
+            event without one as a DeviceLog (DeviceAcquisitionServices.store#LogSamples). The loggerName of each event must be the deviceId
+            of the request. DrtUnsubscribe stops it. Set as DeviceRequest.runServiceName.
+        </description>
+        <implements service="moqui.device.DeviceServices.run#DeviceRequestInternal"/>
+        <out-parameters>
+            <parameter name="status"/>
+            <parameter name="subscriptionId"/>
+            <parameter name="errorMessage"/>
+        </out-parameters>
+    </service>
+</services>

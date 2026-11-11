@@ -1,9 +1,8 @@
 # Validation And Merge Gates
 
-> 2026-11-10: the services moved to moqui-device. The service and acceptance
-> runners are now moqui-device's `scripts/run-fieldbus-tests.py` and
-> `scripts/run-acceptance.py`; this library keeps its Rust driver tests
-> (`cargo test`). The results below were recorded before the move.
+> 2026-11-11: the component keeps one service, `run#DeviceGatewayRequest`; the
+> persistence, the restart of subscriptions, the recipe export and the file
+> transfer are moqui-device's. The results below were recorded before.
 
 The local software gates cover the native API and the current MR services.
 They do not certify a physical PLC, timing bounds, failover ownership across

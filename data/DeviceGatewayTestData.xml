@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+This software is in the public domain under CC0 1.0 Universal plus a 
+Grant of Patent License.
+
+To the extent possible under law, the author(s) have dedicated all
+copyright and related and neighboring rights to this software to the
+public domain worldwide. This software is distributed without any
+warranty.
+
+You should have received a copy of the CC0 Public Domain Dedication
+along with this software (see the LICENSE.md file). If not, see
+<http://creativecommons.org/publicdomain/zero/1.0/>.
+-->
+<entity-facade-xml type="test">
+    <!-- The fieldbus requests of moqui-device's DeviceTestData.xml run on the drivers of this component, as the
+         requests of moqui-plc4j's test data named run#Plc4jRequest. -->
+    <moqui.device.DeviceRequest requestName="VIRTUAL_PLC_01_SyncParameters" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="TestPlcMqttPublishReq01" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="TestPlcMqttSubscribeReq01" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="TestPlcMqttUnsubscribeReq01" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="TestPlcOpcUaReadReq01" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="TestPlcOpcUaUnsubscribeReq01" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="TestPlcOpcUaWriteReq01" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="TestPlcOpcUaOneshotReq01" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="VIRTUAL_PLC_01_LiveParametersMqttSub" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="VIRTUAL_PLC_01_FrameworkStatusRead" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="VIRTUAL_PLC_01_FrameworkControlWrite" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+</entity-facade-xml>

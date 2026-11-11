@@ -140,9 +140,8 @@ async fn ownership_cancellation_and_shutdown() {
                 Some(Arc::new(Sink))
             )
             .await
-            .unwrap_err()
-            .kind,
-        ErrorKind::Busy
+            .unwrap(),
+        ExecutionOutcome::Unchanged
     );
     let mut stop = (*r).clone();
     stop.name = "stop".into();
