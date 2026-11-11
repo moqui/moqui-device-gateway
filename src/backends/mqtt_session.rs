@@ -13,6 +13,7 @@
  */
 
 //! Version-specific rumqttc APIs behind one owned MQTT session. No Moqui runtime is required.
+
 use crate::model::*;
 use rumqttc::{v5, Outgoing, Transport};
 use std::{
@@ -349,7 +350,7 @@ impl Session {
                 | Ok(rumqttc::Event::Outgoing(Outgoing::Publish(0))) => Ok(Event::Published(true)),
                 Ok(_) => Ok(Event::Other),
                 Err(error) => {
-                    tracing::debug!(error=%error, "MQTT connection failed");
+                    tracing::debug!(error = %error, "MQTT connection failed");
                     Err(DeviceGatewayError::transport(format!(
                         "MQTT connection failed: {error}"
                     )))
@@ -388,7 +389,7 @@ impl Session {
                 Ok(v5::Event::Outgoing(Outgoing::Publish(0))) => Ok(Event::Published(true)),
                 Ok(_) => Ok(Event::Other),
                 Err(error) => {
-                    tracing::debug!(error=%error, "MQTT connection failed");
+                    tracing::debug!(error = %error, "MQTT connection failed");
                     Err(DeviceGatewayError::transport(format!(
                         "MQTT connection failed: {error}"
                     )))

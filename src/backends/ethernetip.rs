@@ -16,6 +16,7 @@
 //! ControlLogix), as the PLC4X `logix` driver. The address of an item is the tag name, as the controller knows it:
 //! `Motor_Speed`, `Line[3]`, `Recipe.Temperature`, `Program:Main.Counter`. The physical type of the item gives the
 //! CIP type of a write; a read returns the type the controller sends.
+
 use crate::{device_facade::DeviceFacade, model::*};
 use async_trait::async_trait;
 use rust_ethernet_ip::{EipClient, PlcValue, RoutePath};
@@ -139,6 +140,7 @@ impl DeviceFacade for EthernetIpDeviceClient {
             subscribe: false,
         }
     }
+
     async fn execute(
         &self,
         r: &PreparedDeviceRequest,
@@ -234,6 +236,7 @@ impl DeviceFacade for EthernetIpDeviceClient {
         *session = Some(client);
         Ok(())
     }
+
     async fn close(&self) {
         let sessions = std::mem::take(&mut *self.sessions.lock().await);
         for session in sessions.into_values() {

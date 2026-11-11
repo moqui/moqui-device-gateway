@@ -12,6 +12,8 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
+//! The protocol backends, each an implementation of [`crate::DeviceFacade`] behind its Cargo feature.
+
 #[cfg(feature = "ethercat")]
 pub mod ethercat;
 #[cfg(feature = "ethernetip")]

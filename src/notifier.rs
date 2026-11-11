@@ -14,6 +14,7 @@
 
 //! Persistence failure tracking per request, as the InboundErrorNotifier of the Camel gateway did: the failure is
 //! notified once, when it has lasted the threshold; the recovery is notified only after a failure notification.
+
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
@@ -27,14 +28,17 @@ pub enum Notice {
     /// The request stores again after failing for this long.
     Recovered(Duration),
 }
+
 struct ErrorState {
     first: Instant,
     notified: bool,
 }
+
 pub struct InboundErrors {
     threshold: Duration,
     states: HashMap<String, ErrorState>,
 }
+
 impl InboundErrors {
     pub fn new(threshold: Duration) -> Self {
         Self {
@@ -42,6 +46,7 @@ impl InboundErrors {
             states: HashMap::new(),
         }
     }
+
     /// A store of `request` failed at `now`. The first failure starts the tracking; a notice comes once, when the
     /// failures have lasted the threshold.
     pub fn record_error(&mut self, request: &str, now: Instant) -> Option<Notice> {
@@ -56,6 +61,7 @@ impl InboundErrors {
         }
         None
     }
+
     /// A store of `request` succeeded at `now`: the tracking ends, with a notice if a failure was notified.
     pub fn clear(&mut self, request: &str, now: Instant) -> Option<Notice> {
         let state = self.states.remove(request)?;
@@ -79,12 +85,14 @@ mod tests {
         assert_eq!(errors.record_error("r", start + MINUTE), Some(Notice::Failing(MINUTE)));
         assert_eq!(errors.record_error("r", start + MINUTE * 2), None);
     }
+
     #[test]
     fn a_zero_threshold_notifies_the_first_error() {
         let mut errors = InboundErrors::new(Duration::ZERO);
         let start = Instant::now();
         assert_eq!(errors.record_error("r", start), Some(Notice::Failing(Duration::ZERO)));
     }
+
     #[test]
     fn recovery_is_notified_only_after_an_error_notice() {
         let mut errors = InboundErrors::new(MINUTE);
@@ -98,11 +106,13 @@ mod tests {
             Some(Notice::Recovered(MINUTE * 2))
         );
     }
+
     #[test]
     fn clearing_a_request_without_errors_does_nothing() {
         let mut errors = InboundErrors::new(MINUTE);
         assert_eq!(errors.clear("clean", Instant::now()), None);
     }
+
     #[test]
     fn requests_are_tracked_separately() {
         let mut errors = InboundErrors::new(Duration::ZERO);

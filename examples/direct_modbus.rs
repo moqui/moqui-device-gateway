@@ -13,8 +13,10 @@
  */
 
 //! Run with: cargo run --example direct_modbus --no-default-features --features modbus -- 127.0.0.1:502
+
 use moqui_device_gateway::{codec::ValueCodec, *};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = std::env::args()

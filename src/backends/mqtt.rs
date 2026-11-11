@@ -15,6 +15,7 @@
 //! MQTT 3.1.1 and 5 with rumqttc: publications, and subscriptions that survive a broker or network outage. A
 //! durable subscription acknowledges a message only once the host has stored it. A topic is not read: MQTT is
 //! subscribed.
+
 use super::mqtt_session::{Ack, Acker, Event, Session, Settings};
 use crate::{
     device_facade::{DeviceFacade, Receipt, SampleSink},
@@ -200,7 +201,11 @@ impl Durable {
                 let receipt = match sink.deliver(batch_of(&r, &topic, &bytes)).await {
                     Ok(receipt) => Some(receipt),
                     Err(error) => {
-                        tracing::warn!(request=%r.name,error=%error,"MQTT message not delivered; the broker keeps it");
+                        tracing::warn!(
+                            request = %r.name,
+                            error = %error,
+                            "MQTT message not delivered; the broker keeps it"
+                        );
                         None
                     }
                 };
@@ -219,7 +224,11 @@ impl Durable {
                 drop(permit);
                 if let (true, Some(ack)) = (finished, ack) {
                     if let Err(error) = acker.ack(ack).await {
-                        tracing::warn!(request=%name,error=%error,"MQTT acknowledgement not sent; the broker delivers the message again");
+                        tracing::warn!(
+                            request = %name,
+                            error = %error,
+                            "MQTT acknowledgement not sent; the broker delivers the message again"
+                        );
                     }
                 }
             }
@@ -273,9 +282,9 @@ async fn forward(
         None => {
             if let Err(error) = emit(r, &topic, &bytes, sink) {
                 if recovered {
-                    tracing::error!(request=%r.name,error=%error,"MQTT recovered sample rejected");
+                    tracing::error!(request = %r.name, error = %error, "MQTT recovered sample rejected");
                 } else {
-                    tracing::error!(request=%r.name,error=%error,"MQTT sample rejected");
+                    tracing::error!(request = %r.name, error = %error, "MQTT sample rejected");
                 }
             }
             true
@@ -408,7 +417,11 @@ impl DeviceFacade for MqttDeviceClient {
                         }
                     }
                 }
-                let event = tokio::select! { biased; _ = cancel.cancelled() => break, event = session.poll() => event };
+                let event = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => break,
+                    event = session.poll() => event,
+                };
                 match event {
                     Ok(Event::Message(topic, bytes, ack)) => {
                         if !forward(&mut durable, &cancel, &r, sink.as_ref(), (topic, bytes, ack), false).await {
@@ -416,7 +429,8 @@ impl DeviceFacade for MqttDeviceClient {
                         }
                     }
                     Ok(Event::Connected) => {
-                        // Re-subscribe even if the broker lost its persistent session. Do not replay any command writes.
+                        // Re-subscribe even if the broker lost its persistent session. Do not replay any command
+                        // writes.
                         let restored = tokio::select! { biased;
                             _ = cancel.cancelled() => break,
                             result = subscribe_topics(&mut session, &topics, config.qos, r.deadline()) => result,
@@ -430,18 +444,25 @@ impl DeviceFacade for MqttDeviceClient {
                                 }
                             }
                             Err(error) => {
-                                tracing::error!(request=%r.name,error=%error,"MQTT subscription could not be restored");
+                                tracing::error!(
+                                    request = %r.name,
+                                    error = %error,
+                                    "MQTT subscription could not be restored"
+                                );
                                 break;
                             }
                         }
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        tracing::warn!(request=%r.name,error=%error,"MQTT subscription disconnected");
+                        tracing::warn!(request = %r.name, error = %error, "MQTT subscription disconnected");
                         if !config.reconnect {
                             break;
                         }
-                        tokio::select! { _ = cancel.cancelled() => break, _ = tokio::time::sleep(config.reconnect_delay) => {} }
+                        tokio::select! {
+                            _ = cancel.cancelled() => break,
+                            _ = tokio::time::sleep(config.reconnect_delay) => {}
+                        }
                     }
                 }
             }
@@ -451,14 +472,20 @@ impl DeviceFacade for MqttDeviceClient {
                 let mut acknowledged = durable.finish();
                 let drain = async {
                     loop {
-                        tokio::select! { _ = &mut acknowledged => break, _ = session.poll() => {} }
+                        tokio::select! {
+                            _ = &mut acknowledged => break,
+                            _ = session.poll() => {}
+                        }
                     }
                 };
                 if tokio::time::timeout(std::time::Duration::from_secs(10), drain)
                     .await
                     .is_err()
                 {
-                    tracing::warn!(request=%r.name,"MQTT stopped before every stored message was acknowledged; the broker delivers them again");
+                    tracing::warn!(
+                        request = %r.name,
+                        "MQTT stopped before every stored message was acknowledged; the broker delivers them again"
+                    );
                 }
             }
             if shutdown.load(Ordering::Acquire) {
@@ -492,7 +519,10 @@ impl DeviceFacade for MqttDeviceClient {
                 match tokio::time::timeout(std::time::Duration::from_secs(1), cleanup).await {
                     Ok(Ok(())) => {}
                     _ => {
-                        tracing::warn!(request=%r.name,"MQTT stopped locally; broker subscription cleanup could not be confirmed")
+                        tracing::warn!(
+                            request = %r.name,
+                            "MQTT stopped locally; broker subscription cleanup could not be confirmed"
+                        )
                     }
                 }
             }

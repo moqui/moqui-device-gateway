@@ -14,9 +14,11 @@
 
 //! The MQTT payload format: JSON values that keep integer and decimal precision across the transport, the item
 //! envelopes of moqui-plc4j and the Camel gateway, and the log events of moqui-plc.
+
 use crate::model::*;
 use serde_json::{Map, Number, Value};
 use std::str::FromStr;
+
 pub fn to_json(v: &FieldValue) -> Result<Value, DeviceGatewayError> {
     Ok(match v {
         FieldValue::Record(v) => Value::Object(
@@ -39,6 +41,7 @@ pub fn to_json(v: &FieldValue) -> Result<Value, DeviceGatewayError> {
         FieldValue::Array(v) => Value::Array(v.iter().map(to_json).collect::<Result<_, _>>()?),
     })
 }
+
 pub fn from_json(v: &Value) -> Result<FieldValue, DeviceGatewayError> {
     Ok(match v {
         Value::Null => FieldValue::Null,
@@ -65,6 +68,7 @@ pub fn from_json(v: &Value) -> Result<FieldValue, DeviceGatewayError> {
         ),
     })
 }
+
 /// One JSON object with a value per item, keyed by item name.
 pub fn write_payload(r: &PreparedDeviceRequest, input: &RequestInput) -> Result<Vec<u8>, DeviceGatewayError> {
     let mut p = Map::new();
@@ -84,10 +88,12 @@ pub fn write_payload(r: &PreparedDeviceRequest, input: &RequestInput) -> Result<
     }
     serde_json::to_vec(&p).map_err(|e| DeviceGatewayError::invalid(e.to_string()))
 }
+
 /// The values of the items of a request in one message.
 pub fn read_payload(r: &PreparedDeviceRequest, bytes: &[u8]) -> Result<Vec<ItemResult>, DeviceGatewayError> {
     read_items(&r.items.iter().collect::<Vec<_>>(), bytes)
 }
+
 /// The values of some items in one message: a scalar, an object with the item name or the envelope field
 /// (`numericValue`, `parameterEnumId`, `symbolicValue`), or an array with one such row per item, in order. A row whose
 /// `parameterId` names another parameter fails the item.
@@ -135,6 +141,7 @@ pub fn read_items(items: &[&Item], bytes: &[u8]) -> Result<Vec<ItemResult>, Devi
         })
         .collect())
 }
+
 /// The message of one item: the envelope of moqui-plc4j (`parameterId` and the value field of its kind), plus the value
 /// under the item name.
 pub fn write_item_payload(i: &Item, input: &RequestInput) -> Result<Vec<u8>, DeviceGatewayError> {
@@ -180,6 +187,7 @@ pub fn write_item_payload(i: &Item, input: &RequestInput) -> Result<Vec<u8>, Dev
     }
     serde_json::to_vec(&p).map_err(|e| DeviceGatewayError::invalid(e.to_string()))
 }
+
 /// The events of a moqui-plc log message: one event, or a map of events. The facade attaches the request to the batch.
 pub fn plc_log_batch(r: &PreparedDeviceRequest, bytes: &[u8]) -> Result<SampleBatch, DeviceGatewayError> {
     let p: Value = serde_json::from_slice(bytes).map_err(|_| DeviceGatewayError::invalid("Invalid PLC log JSON"))?;

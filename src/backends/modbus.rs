@@ -13,6 +13,7 @@
  */
 
 //! PLC4J-style Modbus TCP addresses, with zero-based offsets.
+
 use crate::{device_facade::DeviceFacade, model::*};
 use async_trait::async_trait;
 use std::{
@@ -25,6 +26,7 @@ use tokio_modbus::{
     client::{tcp, Context, Reader, Writer},
     slave::Slave,
 };
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Area {
     Coil,
@@ -32,6 +34,7 @@ pub enum Area {
     Holding,
     Input,
 }
+
 #[derive(Clone, Debug)]
 pub struct Address {
     pub area: Area,
@@ -39,6 +42,7 @@ pub struct Address {
     pub ty: PhysicalType,
     pub count: u16,
 }
+
 impl Address {
     pub fn parse(text: &str) -> Result<Self, DeviceGatewayError> {
         let p: Vec<_> = text.split(':').collect();
@@ -89,10 +93,12 @@ impl Address {
         })
     }
 }
+
 #[derive(Default)]
 pub struct ModbusDeviceClient {
     sessions: Mutex<HashMap<String, Arc<Mutex<Option<Context>>>>>,
 }
+
 fn transport(e: impl std::fmt::Display, writing: bool) -> DeviceGatewayError {
     let e = DeviceGatewayError::transport(format!("Modbus transport failed: {e}"));
     if writing {
@@ -101,6 +107,7 @@ fn transport(e: impl std::fmt::Display, writing: bool) -> DeviceGatewayError {
         e
     }
 }
+
 fn reorder(w: &mut [u16], bytes: bool, words: bool) {
     if bytes {
         for w in w.iter_mut() {
@@ -111,6 +118,7 @@ fn reorder(w: &mut [u16], bytes: bool, words: bool) {
         w.reverse();
     }
 }
+
 pub fn decode_words(w: &[u16], ty: PhysicalType, bytes: bool, words: bool) -> Result<FieldValue, DeviceGatewayError> {
     if w.len() != ty.registers()? as usize {
         return Err(DeviceGatewayError::invalid("Unexpected register count"));
@@ -130,6 +138,7 @@ pub fn decode_words(w: &[u16], ty: PhysicalType, bytes: bool, words: bool) -> Re
         _ => return Err(DeviceGatewayError::invalid("Register value outside type range")),
     })
 }
+
 pub fn encode_words(
     v: &FieldValue,
     ty: PhysicalType,
@@ -154,6 +163,7 @@ pub fn encode_words(
     reorder(&mut w, bytes, words);
     Ok(w)
 }
+
 #[async_trait]
 impl DeviceFacade for ModbusDeviceClient {
     fn capabilities(&self) -> Capabilities {
@@ -163,6 +173,7 @@ impl DeviceFacade for ModbusDeviceClient {
             subscribe: false,
         }
     }
+
     async fn execute(
         &self,
         r: &PreparedDeviceRequest,
@@ -422,6 +433,7 @@ impl DeviceFacade for ModbusDeviceClient {
         *slot = Some(ctx);
         Ok(())
     }
+
     async fn close(&self) {
         self.sessions.lock().await.clear();
     }

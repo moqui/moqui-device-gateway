@@ -19,6 +19,7 @@ use moqui_device_gateway::{
     *,
 };
 use opcua::types::{NodeId, Variant};
+
 #[test]
 fn typed_variants_preserve_widths_and_binary() {
     for (ty, v) in [
@@ -37,12 +38,14 @@ fn typed_variants_preserve_widths_and_binary() {
     ));
     assert!(to_variant(&FieldValue::Unsigned(65536), PhysicalType::U16).is_err());
 }
+
 #[test]
 fn no_inferred_namespace() {
     assert_eq!(node_id("ns=2;s=Temperature").unwrap(), NodeId::new(2, "Temperature"));
     assert_eq!(node_id("RAW(ns=2;i=10)").unwrap(), NodeId::new(2, 10u32));
     assert!(node_id("Temperature").is_err());
 }
+
 #[tokio::test]
 async fn credentials_require_encryption_before_connecting() {
     let mut r = common::request(Protocol::OpcUa, "opc.tcp://127.0.0.1:9".into(), Operation::Read);

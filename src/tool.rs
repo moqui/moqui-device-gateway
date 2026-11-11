@@ -16,6 +16,7 @@
 //! backends run on, and the bounded queue that subscriptions and polling tasks deliver their samples to. A worker
 //! thread hands the queued samples to the store services of moqui-device and tells the users when they fail to store
 //! for long. A host without Moqui creates the facade, a runtime and its own `SampleSink` instead.
+
 use crate::{client::DeviceGatewayFacade, model::*, SampleSink};
 use moqui_core::{
     context::{Error, ExecutionContextFactory},
@@ -41,17 +42,21 @@ pub struct Gateway {
     stop: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
+
 impl Gateway {
     pub fn facade(&self) -> &Arc<DeviceGatewayFacade> {
         &self.facade
     }
+
     /// Runs a facade call from a thread outside the runtime, such as a service worker.
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
         self.runtime.block_on(future)
     }
+
     pub fn handle(&self) -> tokio::runtime::Handle {
         self.runtime.handle().clone()
     }
+
     /// Where subscriptions and polling tasks deliver their samples.
     pub fn sink(&self) -> Arc<dyn SampleSink> {
         self.sink.clone()
@@ -70,9 +75,11 @@ pub(crate) struct Job {
     /// Sent once the batch is stored or rejected for good; dropped when the worker gives it up.
     done: Option<oneshot::Sender<()>>,
 }
+
 pub(crate) struct QueueSink {
     sender: mpsc::Sender<Job>,
 }
+
 #[async_trait::async_trait]
 impl SampleSink for QueueSink {
     /// Polling and OPC UA samples: nothing upstream keeps them, so a full queue rejects them.
@@ -87,6 +94,7 @@ impl SampleSink for QueueSink {
             }
         })
     }
+
     /// A durable source's batch waits for room: the source stops taking more, and its broker keeps them.
     async fn deliver(&self, batch: SampleBatch) -> Result<crate::device_facade::Receipt, DeviceGatewayError> {
         let (done, receipt) = crate::device_facade::Receipt::pending();
@@ -100,10 +108,12 @@ impl SampleSink for QueueSink {
         Ok(receipt)
     }
 }
+
 #[derive(Default)]
 pub struct DeviceGatewayToolFactory {
     gateway: Mutex<Option<Arc<Gateway>>>,
 }
+
 impl DeviceGatewayToolFactory {
     /// The facade, runtime and sample queue of this factory, once initialized.
     pub fn gateway(&self) -> Result<Arc<Gateway>, Error> {
@@ -113,16 +123,19 @@ impl DeviceGatewayToolFactory {
             .clone()
             .ok_or_else(|| Error::new("Device gateway factory is not initialized"))
     }
+
     pub fn facade(&self) -> Result<Arc<DeviceGatewayFacade>, Error> {
         Ok(self.gateway()?.facade.clone())
     }
 }
+
 struct DeviceGatewayTool;
 impl Tool for DeviceGatewayTool {}
 impl ToolFactory for DeviceGatewayToolFactory {
     fn name(&self) -> &str {
         "DeviceGateway"
     }
+
     fn init(&self, factory: &Arc<ExecutionContextFactory>) -> Result<(), Error> {
         let mut gateway = self
             .gateway
@@ -155,10 +168,12 @@ impl ToolFactory for DeviceGatewayToolFactory {
         }));
         Ok(())
     }
+
     fn get_instance(&self, _: &[Value]) -> Result<Arc<dyn Tool>, Error> {
         self.gateway()?;
         Ok(Arc::new(DeviceGatewayTool))
     }
+
     /// Ends the subscriptions (a durable broker session keeps collecting until the next start), then stops the worker:
     /// the samples stored are acknowledged, the others are delivered again by their broker.
     fn destroy(&self) {
@@ -173,6 +188,7 @@ impl ToolFactory for DeviceGatewayToolFactory {
         }
     }
 }
+
 /// Persistence failure notices: `device_gateway_error_notification=false` turns them off, and
 /// `device_gateway_error_notification_seconds` (default 60) is how long the failures of a request last before the
 /// user is told.
@@ -185,6 +201,7 @@ fn inbound_errors() -> Option<crate::notifier::InboundErrors> {
         .unwrap_or(60);
     Some(crate::notifier::InboundErrors::new(Duration::from_secs(seconds)))
 }
+
 /// The persistence worker: takes the batches waiting, stores them a request at a time, and while the database does not
 /// answer keeps them and tries again, so the queue fills and durable sources stop taking more from their broker.
 fn persist_loop(
@@ -231,6 +248,7 @@ fn persist_loop(
         }
     }
 }
+
 /// The batches of one request as one.
 fn merge(jobs: &[Job]) -> SampleBatch {
     let first = &jobs[0].batch;
@@ -242,6 +260,7 @@ fn merge(jobs: &[Job]) -> SampleBatch {
         samples: jobs.iter().flat_map(|j| j.batch.samples.iter().cloned()).collect(),
     }
 }
+
 fn store_group(
     factory: &Arc<ExecutionContextFactory>,
     jobs: Vec<Job>,
@@ -269,10 +288,19 @@ fn store_group(
             };
             match (&failure, finished) {
                 (Some(error), true) => {
-                    tracing::error!(request=%batch.request_name,error=%error,"Device gateway samples were not saved")
+                    tracing::error!(
+                        request = %batch.request_name,
+                        error = %error,
+                        "Device gateway samples were not saved"
+                    )
                 }
                 (Some(error), false) => {
-                    tracing::warn!(request=%batch.request_name,samples=batch.samples.len(),error=%error,"Device gateway samples wait for the database")
+                    tracing::warn!(
+                        request = %batch.request_name,
+                        samples = batch.samples.len(),
+                        error = %error,
+                        "Device gateway samples wait for the database"
+                    )
                 }
                 _ => {}
             }
@@ -284,7 +312,7 @@ fn store_group(
                 };
                 if let Some(notice) = notice {
                     if let Err(error) = crate::binding::notify_inbound(&ec, &batch, &notice, failure.clone()) {
-                        tracing::error!(request=%batch.request_name,error=%error,"Persistence notice not sent");
+                        tracing::error!(request = %batch.request_name, error = %error, "Persistence notice not sent");
                     }
                 }
             }
@@ -300,7 +328,11 @@ fn store_group(
         }
         if stop.load(Ordering::Acquire) {
             // Dropping the receipts leaves durable messages unacknowledged: the broker delivers them again.
-            tracing::warn!(request=%batch.request_name,samples=batch.samples.len(),"Device gateway stopped before the database answered; durable sources deliver the samples again");
+            tracing::warn!(
+                request = %batch.request_name,
+                samples = batch.samples.len(),
+                "Device gateway stopped before the database answered; durable sources deliver the samples again"
+            );
             return;
         }
         let until = std::time::Instant::now() + delay;

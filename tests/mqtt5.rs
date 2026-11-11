@@ -20,6 +20,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
+
 async fn packet(stream: &mut TcpStream) -> (u8, Vec<u8>) {
     let header = stream.read_u8().await.unwrap();
     let mut length = 0usize;
@@ -37,6 +38,7 @@ async fn packet(stream: &mut TcpStream) -> (u8, Vec<u8>) {
     stream.read_exact(&mut body).await.unwrap();
     (header, body)
 }
+
 async fn send(stream: &mut TcpStream, header: u8, body: &[u8]) {
     let mut packet = vec![header];
     let mut n = body.len();
@@ -54,6 +56,7 @@ async fn send(stream: &mut TcpStream, header: u8, body: &[u8]) {
     packet.extend(body);
     stream.write_all(&packet).await.unwrap();
 }
+
 async fn broker(write: bool, reject: bool) -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let ep = format!("mqtt://{}", listener.local_addr().unwrap());
@@ -97,11 +100,13 @@ async fn broker(write: bool, reject: bool) -> (String, tokio::task::JoinHandle<(
     });
     (ep, task)
 }
+
 fn request(endpoint: String, operation: Operation) -> Arc<PreparedDeviceRequest> {
     let mut r = common::request(Protocol::Mqtt, endpoint, operation);
     r.items[0].address = "/test/topic".into();
     Arc::new(r)
 }
+
 #[tokio::test]
 async fn qos1_publication_preserves_gateway_envelope() {
     let (ep, server) = broker(true, false).await;
@@ -121,6 +126,7 @@ async fn qos1_publication_preserves_gateway_envelope() {
     server.await.unwrap();
     f.close().await;
 }
+
 #[tokio::test]
 async fn rejected_puback_cannot_report_success() {
     let (ep, server) = broker(true, true).await;
@@ -139,6 +145,7 @@ async fn rejected_puback_cannot_report_success() {
     server.await.unwrap();
     f.close().await;
 }
+
 #[tokio::test]
 async fn a_topic_cannot_be_read_polled_or_subscribed_cyclically() {
     let f = Arc::new(DeviceGatewayFacade::new());
@@ -170,6 +177,7 @@ async fn a_topic_cannot_be_read_polled_or_subscribed_cyclically() {
     }
     f.close().await;
 }
+
 #[tokio::test]
 async fn payload_without_items_is_one_publication_on_the_request_topic() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -209,17 +217,20 @@ async fn payload_without_items_is_one_publication_on_the_request_topic() {
     server.await.unwrap();
     f.close().await;
 }
+
 /// A host that keeps every receipt until the test says it stored the batch, or gave it up.
 #[derive(Default)]
 struct HeldSink {
     done: std::sync::Mutex<Vec<tokio::sync::oneshot::Sender<()>>>,
     delivered: tokio::sync::Notify,
 }
+
 #[async_trait::async_trait]
 impl SampleSink for HeldSink {
     fn emit(&self, _: SampleBatch) -> Result<(), DeviceGatewayError> {
         panic!("a durable subscription must deliver, not emit");
     }
+
     async fn deliver(&self, batch: SampleBatch) -> Result<Receipt, DeviceGatewayError> {
         assert_eq!(batch.samples.len(), 1);
         let (done, receipt) = Receipt::pending();
@@ -228,6 +239,7 @@ impl SampleSink for HeldSink {
         Ok(receipt)
     }
 }
+
 /// A QoS 1 message of a durable subscription is acknowledged once the host stored it, never on receipt; one the host
 /// gives up is never acknowledged, so the broker keeps it.
 #[tokio::test]

@@ -27,6 +27,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
+
 #[test]
 fn address_bounds_and_register_orders() {
     for bad in [
@@ -54,6 +55,7 @@ fn address_bounds_and_register_orders() {
         }
     }
 }
+
 async fn server(delay: Duration, write: bool) -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap().to_string();
@@ -84,6 +86,7 @@ async fn server(delay: Duration, write: bool) -> (String, tokio::task::JoinHandl
     });
     (address, task)
 }
+
 #[tokio::test]
 async fn real_tcp_read_preserves_u64() {
     let (address, server) = server(Duration::ZERO, false).await;
@@ -101,6 +104,7 @@ async fn real_tcp_read_preserves_u64() {
     facade.close().await;
     server.await.unwrap();
 }
+
 #[tokio::test]
 async fn real_tcp_write_waits_for_echo() {
     let (address, server) = server(Duration::ZERO, true).await;
@@ -125,6 +129,7 @@ async fn real_tcp_write_waits_for_echo() {
     server.await.unwrap();
     facade.close().await;
 }
+
 #[tokio::test]
 async fn write_timeout_is_uncertain_and_not_retried() {
     let (address, server) = server(Duration::from_millis(100), true).await;
@@ -152,6 +157,7 @@ async fn write_timeout_is_uncertain_and_not_retried() {
     server.await.unwrap();
     facade.close().await;
 }
+
 #[tokio::test]
 async fn bulk_items_share_one_tcp_response() {
     let (address, server) = server(Duration::ZERO, false).await;

@@ -12,6 +12,9 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
+//! The conversion between the physical value of an item (a register, a node, a tag) and the logical value of its
+//! parameter: range mapping, scale and offset, rounding, inverted indicators, and the bounds of the parameter.
+
 use crate::model::*;
 use rust_decimal::{Decimal, RoundingStrategy};
 
@@ -28,6 +31,7 @@ pub struct ValueCodec {
     pub reverse_logic: bool,
     pub allow_duplicate: bool,
 }
+
 impl Default for ValueCodec {
     fn default() -> Self {
         Self {
@@ -44,15 +48,18 @@ impl Default for ValueCodec {
         }
     }
 }
+
 fn checked(v: Option<Decimal>) -> Result<Decimal, DeviceGatewayError> {
     v.ok_or_else(|| DeviceGatewayError::invalid("Numeric conversion overflow"))
 }
+
 fn map(v: Decimal, a: Decimal, b: Decimal, c: Decimal, d: Decimal) -> Result<Decimal, DeviceGatewayError> {
     checked(checked(v.checked_sub(a))?.checked_mul(checked(d.checked_sub(c))?))?
         .checked_div(checked(b.checked_sub(a))?)
         .and_then(|x| x.checked_add(c))
         .ok_or_else(|| DeviceGatewayError::invalid("Invalid numeric mapping range"))
 }
+
 impl ValueCodec {
     pub fn validate(&self) -> Result<(), DeviceGatewayError> {
         if self.scale.is_zero() || self.tolerance < Decimal::ZERO || self.digits.is_some_and(|d| d > 28) {
@@ -67,6 +74,7 @@ impl ValueCodec {
         }
         Ok(())
     }
+
     /// A value read is limited to the bounds of its parameter.
     fn clamp(&self, mut n: Decimal) -> Decimal {
         if let Some(v) = self.logical_min {
@@ -77,11 +85,13 @@ impl ValueCodec {
         }
         n
     }
+
     fn round(&self, n: Decimal) -> Decimal {
         self.digits.map_or(n, |d| {
             n.round_dp_with_strategy(d, RoundingStrategy::MidpointAwayFromZero)
         })
     }
+
     pub fn decode(&self, value: &FieldValue, kind: ParameterKind) -> Result<FieldValue, DeviceGatewayError> {
         self.validate()?;
         match kind {
@@ -114,6 +124,7 @@ impl ValueCodec {
             ParameterKind::Text => Ok(value.clone()),
         }
     }
+
     pub fn encode(
         &self,
         value: &FieldValue,

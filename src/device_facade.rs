@@ -13,6 +13,7 @@
  */
 
 //! Protocol contract shared by Moqui and independent Rust hosts. No entity or service facade crosses this boundary.
+
 use crate::model::*;
 use async_trait::async_trait;
 use std::{sync::Arc, time::Instant};

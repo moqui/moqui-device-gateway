@@ -15,6 +15,7 @@
 //! OPC UA with async-opcua: reads and writes on a session shared per connection, and subscriptions of monitored items
 //! on a session of their own, so that ending one cannot affect other requests. A lost subscription session ends the
 //! subscription; moqui-device's start#Subscriptions starts it again. No write is sent twice.
+
 use crate::{
     device_facade::{DeviceFacade, SampleSink},
     model::*,
@@ -32,19 +33,23 @@ use std::{
 };
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
 #[derive(Default)]
 pub struct OpcUaDeviceClient {
     sessions: Mutex<HashMap<String, Arc<SessionGuard>>>,
 }
+
 struct SessionGuard {
     session: Arc<Session>,
     task: tokio::task::JoinHandle<StatusCode>,
 }
+
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         self.task.abort();
     }
 }
+
 pub fn node_id(text: &str) -> Result<NodeId, DeviceGatewayError> {
     let text = text.trim();
     let text = text
@@ -54,6 +59,7 @@ pub fn node_id(text: &str) -> Result<NodeId, DeviceGatewayError> {
     NodeId::from_str(text)
         .map_err(|_| DeviceGatewayError::invalid("Invalid OPC UA NodeId; use an explicit namespace and identifier"))
 }
+
 pub fn from_variant(v: &Variant) -> Result<FieldValue, DeviceGatewayError> {
     Ok(match v {
         Variant::Empty => FieldValue::Null,
@@ -77,6 +83,7 @@ pub fn from_variant(v: &Variant) -> Result<FieldValue, DeviceGatewayError> {
         }
     })
 }
+
 pub fn to_variant(v: &FieldValue, ty: PhysicalType) -> Result<Variant, DeviceGatewayError> {
     let e = || DeviceGatewayError::invalid("Value does not match OPC UA physical type");
     let v = if matches!(ty, PhysicalType::Bool | PhysicalType::Text | PhysicalType::Bytes) {
@@ -101,6 +108,7 @@ pub fn to_variant(v: &FieldValue, ty: PhysicalType) -> Result<Variant, DeviceGat
         _ => return Err(e()),
     })
 }
+
 fn result(id: &str, v: DataValue) -> ItemResult {
     let status = v.status.unwrap_or(StatusCode::Good);
     let mut result = if !status.is_good() {
@@ -116,6 +124,7 @@ fn result(id: &str, v: DataValue) -> ItemResult {
     result.source_time = v.source_timestamp.map(|t| SystemTime::from(t.as_chrono()));
     result
 }
+
 async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<SessionGuard, DeviceGatewayError> {
     let c = &r.connection;
     let option = |k: &str| c.options.get(k).map(String::as_str);
@@ -204,6 +213,7 @@ async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<Session
     }
     Ok(guard)
 }
+
 impl OpcUaDeviceClient {
     async fn session(
         &self,
@@ -222,6 +232,7 @@ impl OpcUaDeviceClient {
         Ok(s)
     }
 }
+
 #[async_trait]
 impl DeviceFacade for OpcUaDeviceClient {
     fn capabilities(&self) -> Capabilities {
@@ -231,6 +242,7 @@ impl DeviceFacade for OpcUaDeviceClient {
             subscribe: true,
         }
     }
+
     async fn execute(
         &self,
         r: &PreparedDeviceRequest,
@@ -304,6 +316,7 @@ impl DeviceFacade for OpcUaDeviceClient {
         }
         Ok(())
     }
+
     async fn subscribe(
         &self,
         r: Arc<PreparedDeviceRequest>,
@@ -341,7 +354,7 @@ impl DeviceFacade for OpcUaDeviceClient {
             let value = result(&req.items[index].parameter_id, value);
             if let Some(error) = value.error {
                 // A bad quality goes to the store as an acquisition error, which logs and notifies it.
-                tracing::debug!(request=%req.name, error=%error, "OPC UA sample without a good value");
+                tracing::debug!(request = %req.name, error = %error, "OPC UA sample without a good value");
                 let _ = sink.emit(SampleBatch {
                     request_name: req.name.clone(),
                     errors: vec![format!("{}: {}", value.parameter_id, error)],
@@ -369,7 +382,7 @@ impl DeviceFacade for OpcUaDeviceClient {
                     quality: value.quality,
                 }],
             }) {
-                tracing::error!(request=%req.name,error=%error,"OPC UA sample not queued");
+                tracing::error!(request = %req.name, error = %error, "OPC UA sample not queued");
             }
         });
         let session = &guard.session;
@@ -418,13 +431,14 @@ impl DeviceFacade for OpcUaDeviceClient {
             tokio::select! {
                 _ = cancel.cancelled() => {}
                 _ = &mut guard.task => {
-                    tracing::error!(request=%r.name, "OPC UA subscription session stopped");
+                    tracing::error!(request = %r.name, "OPC UA subscription session stopped");
                 }
             }
             let _ = tokio::time::timeout(Duration::from_secs(2), guard.session.delete_subscriptions(&[sub])).await;
             let _ = tokio::time::timeout(Duration::from_secs(2), guard.session.disconnect()).await;
         }))
     }
+
     async fn close(&self) {
         let sessions = std::mem::take(&mut *self.sessions.lock().await);
         for (_, s) in sessions {

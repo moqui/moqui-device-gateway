@@ -17,6 +17,7 @@
 //! DeviceRequest, its device, connection and items become a request of the facade, which runs it on the driver of the
 //! connection. The values read or received go to the store services of moqui-device, which own the persistence. No
 //! entity or service reaches the drivers.
+
 use crate::{codec::ValueCodec, model::*, tool::DeviceGatewayToolFactory};
 use moqui_core::{
     context::ExecutionContext,
@@ -30,15 +31,18 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
 fn error(e: impl std::fmt::Display) -> Error {
     Error::new(e.to_string())
 }
+
 pub(crate) fn text(v: &EntityValue, key: &str) -> Option<String> {
     v.get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(String::from)
 }
+
 fn decimal(v: &EntityValue, key: &str) -> Result<Option<Decimal>, Error> {
     v.get(key)
         .filter(|v| !matches!(v, Value::Null))
@@ -51,6 +55,7 @@ fn decimal(v: &EntityValue, key: &str) -> Result<Option<Decimal>, Error> {
         })
         .transpose()
 }
+
 fn positive_ms(v: &EntityValue, key: &str, default: u64) -> Result<Duration, Error> {
     let n = decimal(v, key)?.unwrap_or(Decimal::from(default));
     let ms = u64::try_from(n).map_err(error)?;
@@ -59,6 +64,7 @@ fn positive_ms(v: &EntityValue, key: &str, default: u64) -> Result<Duration, Err
     }
     Ok(Duration::from_millis(ms))
 }
+
 /// An entity value as a service receives it: the EntityValue of a Rust caller, or the value that a script or XML
 /// actions share with their context (a Mutex around it). The request is prepared from a copy.
 fn entity_value(v: &Value) -> Option<Arc<EntityValue>> {
@@ -71,12 +77,14 @@ fn entity_value(v: &Value) -> Option<Arc<EntityValue>> {
             .map(|cell| Arc::new(moqui_lib::sync::lock(&cell).clone()))
     })
 }
+
 fn entity(params: &Parameters, key: &str) -> Result<Arc<EntityValue>, Error> {
     match params.get(key) {
         None | Some(Value::Null) => Err(Error::new(format!("Missing {key}"))),
         Some(v) => entity_value(v).ok_or_else(|| Error::new(format!("{key} must be EntityValue"))),
     }
 }
+
 /// A list of entity values: a list, the list of a script, or a find result.
 fn entity_list(params: &Parameters, key: &str) -> Result<Vec<Arc<EntityValue>>, Error> {
     match params.get(key) {
@@ -97,11 +105,13 @@ fn entity_list(params: &Parameters, key: &str) -> Result<Vec<Arc<EntityValue>>, 
         Some(_) => Err(Error::new(format!("{key} must be a list of entity values"))),
     }
 }
+
 pub(crate) fn facade(ec: &ExecutionContext) -> Result<EntityFacade, Error> {
     ec.factory()
         .entity()
         .ok_or_else(|| Error::new("Entity Engine is not installed"))
 }
+
 /// A record by its primary key, from the entity cache.
 fn find(ef: &EntityFacade, entity: &str, key: &str, id: &str) -> Result<Arc<EntityValue>, Error> {
     ef.find(entity)?
@@ -111,6 +121,7 @@ fn find(ef: &EntityFacade, entity: &str, key: &str, id: &str) -> Result<Arc<Enti
         .map(Arc::new)
         .ok_or_else(|| Error::new(format!("{entity} record not found: {id}")))
 }
+
 fn parse_options(raw: &str) -> Result<BTreeMap<String, String>, Error> {
     if raw.trim().starts_with('{') {
         return serde_json::from_str(raw).map_err(error);
@@ -123,6 +134,7 @@ fn parse_options(raw: &str) -> Result<BTreeMap<String, String>, Error> {
     }
     Ok(result)
 }
+
 fn connection(r: &EntityValue, c: Option<&EntityValue>, device_id: &str) -> Result<Connection, Error> {
     let mut options = if let Some(c) = c {
         if text(c, "deviceId").as_deref() != Some(device_id) {
@@ -130,7 +142,8 @@ fn connection(r: &EntityValue, c: Option<&EntityValue>, device_id: &str) -> Resu
         }
         if text(c, "userId").is_some() {
             return Err(Error::new(
-                "DeviceConnection.userId needs an explicit credential provider; password hashes cannot authenticate a device",
+                "DeviceConnection.userId needs an explicit credential provider; password hashes cannot authenticate a \
+                 device",
             ));
         }
         parse_options(&text(c, "options").unwrap_or_default())?
@@ -266,6 +279,7 @@ fn connection(r: &EntityValue, c: Option<&EntityValue>, device_id: &str) -> Resu
         credentials: Credentials { username, password },
     })
 }
+
 fn kind(ef: &EntityFacade, def: &EntityValue) -> Result<ParameterKind, Error> {
     let ty = text(def, "parameterTypeEnumId").ok_or_else(|| Error::new("ParameterDef has no type"))?;
     Ok(match ty.as_str() {
@@ -281,6 +295,7 @@ fn kind(ef: &EntityFacade, def: &EntityValue) -> Result<ParameterKind, Error> {
         }
     })
 }
+
 /// The physical type of an item without itemTypeEnumId, from the kind of its parameter: what a JSON (MQTT) value
 /// carries. Set itemTypeEnumId for an exact register or PLC type.
 fn default_physical_type(kind: ParameterKind) -> PhysicalType {
@@ -291,6 +306,7 @@ fn default_physical_type(kind: ParameterKind) -> PhysicalType {
         ParameterKind::Text => PhysicalType::Text,
     }
 }
+
 fn logical_value(parameter: &EntityValue, kind: ParameterKind) -> Result<FieldValue, Error> {
     Ok(match kind {
         ParameterKind::Numeric => FieldValue::Decimal(
@@ -316,6 +332,7 @@ fn logical_value(parameter: &EntityValue, kind: ParameterKind) -> Result<FieldVa
         ),
     })
 }
+
 /// The service a request runs through: run#DeviceGatewayRequest takes the driver of the connection
 /// (DeviceConnection.driverEnumId, else the scheme of the endpoint); run#PlcLogRequest is an MQTT subscription whose
 /// events are stored as logs.
@@ -324,6 +341,7 @@ pub enum ServiceKind {
     Fieldbus,
     PlcLog,
 }
+
 pub fn prepare(
     ec: &ExecutionContext,
     params: &Parameters,
@@ -463,6 +481,7 @@ pub fn prepare(
     request.validate().map_err(error)?;
     Ok((Arc::new(request), input))
 }
+
 /// moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest: the driver of the connection runs the request.
 pub fn run_device_gateway_request(
     ec: &ExecutionContext,
@@ -471,6 +490,7 @@ pub fn run_device_gateway_request(
 ) -> Result<Parameters, Error> {
     run_request(ec, params, ServiceKind::Fieldbus)
 }
+
 /// moqui.device.gateway.DeviceGatewayServices.run#PlcLogRequest: an MQTT subscription to PLC log events.
 pub fn run_plc_log_request(
     ec: &ExecutionContext,
@@ -479,6 +499,7 @@ pub fn run_plc_log_request(
 ) -> Result<Parameters, Error> {
     run_request(ec, params, ServiceKind::PlcLog)
 }
+
 fn run_request(ec: &ExecutionContext, params: &Parameters, service: ServiceKind) -> Result<Parameters, Error> {
     if tokio::runtime::Handle::try_current().is_ok() {
         return Err(Error::new(
@@ -556,6 +577,7 @@ fn run_request(ec: &ExecutionContext, params: &Parameters, service: ServiceKind)
     );
     Ok(result)
 }
+
 /// An item result as the service returns it: parameterId, status, value and error.
 fn item_result_value(i: &ItemResult) -> Value {
     let status = match i.status {
@@ -571,6 +593,7 @@ fn item_result_value(i: &ItemResult) -> Value {
         "error".into() => i.error.as_ref().map(Value::string).unwrap_or(Value::Null),
     })
 }
+
 pub fn to_value(v: &FieldValue) -> Value {
     match v {
         FieldValue::Record(v) => Value::Map(v.iter().map(|(k, v)| (k.clone(), to_value(v))).collect()),
@@ -585,12 +608,14 @@ pub fn to_value(v: &FieldValue) -> Value {
         FieldValue::Array(v) => Value::List(v.iter().map(to_value).collect()),
     }
 }
+
 fn timestamp(time: SystemTime) -> Result<Value, Error> {
     let duration = time.duration_since(UNIX_EPOCH).map_err(error)?;
     Ok(Value::Timestamp(
         jiff::Timestamp::from_nanosecond(duration.as_nanos() as i128).map_err(error)?,
     ))
 }
+
 /// The service that stores the samples of a request. A SECA on it runs after each store.
 pub const STORE_SAMPLES: &str = "moqui.device.DeviceAcquisitionServices.store#Samples";
 /// The service that stores the events of a PLC log subscription.
@@ -598,6 +623,7 @@ pub const STORE_PLC_LOG: &str = "moqui.device.DeviceAcquisitionServices.store#Lo
 fn optional_text(value: Option<&String>) -> Value {
     value.map(Value::string).unwrap_or(Value::Null)
 }
+
 fn sample_to_value(s: &Sample) -> Result<Value, Error> {
     Ok(Value::Map(indexmap::indexmap! {
         "deviceId".into() => Value::string(&s.device_id),
@@ -618,6 +644,7 @@ fn sample_to_value(s: &Sample) -> Result<Value, Error> {
         },
     }))
 }
+
 /// Calls a store service with the samples (as [`sample_to_value`] gives them) and returns its results; an error the
 /// service recorded is an error here.
 fn call_store(
@@ -639,6 +666,7 @@ fn call_store(
     params.insert("samples".into(), Value::List(samples));
     call_service(ec, service, &params)
 }
+
 /// Calls a service; an error it recorded in the message facade is an error here.
 fn call_service(ec: &ExecutionContext, service: &str, params: &Parameters) -> Result<Parameters, Error> {
     let mark = ec.message().error_mark();
@@ -649,10 +677,12 @@ fn call_service(ec: &ExecutionContext, service: &str, params: &Parameters) -> Re
     }
     Ok(out)
 }
+
 /// The gateway this process is, from the property `device_gateway_device_id`; empty when not configured.
 pub fn gateway_device_id() -> String {
     moqui_lib::env::get_prop_or_env("device_gateway_device_id")
 }
+
 /// With a configured gateway, a request runs only for a device in its scope: the DeviceGroups the gateway is a
 /// DgmpEdgeGateway member of, and their members, recursively (DeviceAcquisitionServices.get#GatewayScope).
 fn check_gateway_scope(ec: &ExecutionContext, request_name: &str, device_id: &str) -> Result<(), Error> {
@@ -683,7 +713,9 @@ fn check_gateway_scope(ec: &ExecutionContext, request_name: &str, device_id: &st
     }
     Ok(())
 }
-/// Tells the user that the samples of a request fail to store, or store again (DeviceAcquisitionServices.notify#InboundState).
+
+/// Tells the user that the samples of a request fail to store, or store again
+/// (DeviceAcquisitionServices.notify#InboundState).
 pub(crate) fn notify_inbound(
     ec: &ExecutionContext,
     batch: &SampleBatch,
@@ -721,6 +753,7 @@ pub(crate) fn notify_inbound(
     )
     .map(|_| ())
 }
+
 /// What the store did with a batch.
 pub(crate) enum Stored {
     Done,
@@ -729,6 +762,7 @@ pub(crate) enum Stored {
     /// The database did not answer: the samples from this index on are to be sent again.
     Retry(usize),
 }
+
 /// The persistence worker's path: subscription and polling samples go through the store services.
 pub(crate) fn store_batch(ec: &ExecutionContext, batch: &SampleBatch) -> Result<Stored, Error> {
     let plc_log = batch.request.as_ref().is_some_and(|r| r.plc_log);
@@ -762,6 +796,7 @@ pub(crate) fn store_batch(ec: &ExecutionContext, batch: &SampleBatch) -> Result<
         Stored::Done
     })
 }
+
 /// The facade, runtime and sample queue of the DeviceGateway tool.
 pub(crate) fn gateway(ec: &ExecutionContext) -> Result<Arc<crate::tool::Gateway>, Error> {
     ec.factory()

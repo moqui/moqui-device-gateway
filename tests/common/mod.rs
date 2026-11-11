@@ -15,6 +15,7 @@
 #![allow(dead_code)]
 use moqui_device_gateway::{codec::ValueCodec, model::*};
 use std::{collections::BTreeMap, time::Duration};
+
 pub fn request(protocol: Protocol, endpoint: String, operation: Operation) -> PreparedDeviceRequest {
     PreparedDeviceRequest {
         name: "test-request".into(),

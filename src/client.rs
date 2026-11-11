@@ -12,6 +12,10 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
+//! [`DeviceGatewayFacade`]: the one API of every protocol. It runs reads and writes on the backend of the connection,
+//! keeps the subscriptions and polling tasks by request name, and converts between the physical values of the backends
+//! and the logical values of the parameters.
+
 pub use crate::device_facade::{DeviceFacade, Receipt, SampleSink};
 use crate::model::*;
 use std::{
@@ -30,12 +34,14 @@ struct Subscription {
     task: tokio::task::JoinHandle<()>,
     request: Arc<PreparedDeviceRequest>,
 }
+
 pub struct DeviceGatewayFacade {
     clients: HashMap<ProtocolKey, Arc<dyn DeviceFacade>>,
     subscriptions: Mutex<HashMap<String, Subscription>>,
     lifecycle: Mutex<()>,
     closed: AtomicBool,
 }
+
 #[derive(Hash, Eq, PartialEq)]
 struct ProtocolKey(u8);
 impl From<Protocol> for ProtocolKey {
@@ -43,11 +49,13 @@ impl From<Protocol> for ProtocolKey {
         Self(p as u8)
     }
 }
+
 impl Default for DeviceGatewayFacade {
     fn default() -> Self {
         Self::new()
     }
 }
+
 impl DeviceGatewayFacade {
     pub fn new() -> Self {
         let mut facade = Self {
@@ -83,9 +91,11 @@ impl DeviceGatewayFacade {
         );
         facade
     }
+
     pub fn install(&mut self, protocol: Protocol, client: Arc<dyn DeviceFacade>) {
         self.clients.insert(protocol.into(), client);
     }
+
     pub async fn execute(
         self: &Arc<Self>,
         request: Arc<PreparedDeviceRequest>,
@@ -225,19 +235,23 @@ impl DeviceGatewayFacade {
                         match result {
                             Ok(()) if failing => {
                                 failing = false;
-                                tracing::info!(request=%req.name, "Field polling reads again");
+                                tracing::info!(request = %req.name, "Field polling reads again");
                             }
                             Ok(()) => {}
                             Err(error) => {
                                 if !failing {
                                     failing = true;
-                                    tracing::error!(request=%req.name, error=%error, "Field polling failed; it goes on at every interval");
+                                    tracing::error!(
+                                        request = %req.name,
+                                        error = %error,
+                                        "Field polling failed; it goes on at every interval"
+                                    );
                                 }
                                 polled.errors.push(error.to_string());
                             }
                         }
                         if let Err(error) = sink.emit(polled) {
-                            tracing::error!(request=%req.name, error=%error, "Field samples were not queued");
+                            tracing::error!(request = %req.name, error = %error, "Field samples were not queued");
                         }
                     }
                 })
@@ -256,6 +270,7 @@ impl DeviceGatewayFacade {
         self.read_write(&request, input, output, deadline, client).await?;
         Ok(output.outcome())
     }
+
     async fn read_write(
         &self,
         request: &PreparedDeviceRequest,
@@ -299,6 +314,7 @@ impl DeviceGatewayFacade {
         }
         Ok(())
     }
+
     /// The requests with a subscription or polling task: those whose task runs, and those whose task ended without an
     /// unsubscribe (a lost connection). An unsubscribed request is in neither list.
     pub async fn subscription_names(&self) -> (Vec<String>, Vec<String>) {
@@ -314,6 +330,7 @@ impl DeviceGatewayFacade {
         dropped.sort();
         (active, dropped)
     }
+
     pub async fn close(&self) {
         let _guard = self.lifecycle.lock().await;
         self.closed.store(true, Ordering::Release);
@@ -344,6 +361,7 @@ impl DeviceGatewayFacade {
         }
     }
 }
+
 fn decode_results(request: &PreparedDeviceRequest, results: &mut [ItemResult]) {
     for result in results {
         if result.status != ItemStatus::Completed {
@@ -364,6 +382,7 @@ fn decode_results(request: &PreparedDeviceRequest, results: &mut [ItemResult]) {
         }
     }
 }
+
 /// The samples of a read: the values read, and an error for each item that failed.
 fn batch(request: &Arc<PreparedDeviceRequest>, items: Vec<ItemResult>) -> SampleBatch {
     SampleBatch {
@@ -398,12 +417,14 @@ fn batch(request: &Arc<PreparedDeviceRequest>, items: Vec<ItemResult>) -> Sample
             .collect(),
     }
 }
+
 /// The sink of a subscription: decodes the physical values of the backend to the logical values of the parameters, and
 /// attaches the request to each batch.
 struct DecodedSink {
     request: Arc<PreparedDeviceRequest>,
     inner: Arc<dyn SampleSink>,
 }
+
 #[async_trait::async_trait]
 impl SampleSink for DecodedSink {
     fn emit(&self, value: SampleBatch) -> Result<(), DeviceGatewayError> {
@@ -414,6 +435,7 @@ impl SampleSink for DecodedSink {
         self.inner.deliver(self.decode(value)).await
     }
 }
+
 impl DecodedSink {
     fn decode(&self, mut value: SampleBatch) -> SampleBatch {
         value.request = Some(self.request.clone());

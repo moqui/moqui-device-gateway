@@ -13,8 +13,10 @@
  */
 
 //! Independent consumer: no Moqui runtime, database, Entity Engine or service registry.
+
 use moqui_device_gateway::{codec::ValueCodec, *};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = std::env::args()

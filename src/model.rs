@@ -12,6 +12,8 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
+//! The requests, values, results and errors that the facade and the backends share. Nothing here depends on Moqui.
+
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -34,6 +36,7 @@ pub enum FieldValue {
     Array(Vec<FieldValue>),
     Record(BTreeMap<String, FieldValue>),
 }
+
 impl FieldValue {
     pub fn decimal(&self) -> Result<Decimal, DeviceGatewayError> {
         match self {
@@ -48,6 +51,7 @@ impl FieldValue {
         }
     }
 }
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum PhysicalType {
     Bool,
@@ -64,6 +68,7 @@ pub enum PhysicalType {
     Text,
     Bytes,
 }
+
 impl PhysicalType {
     pub fn registers(self) -> Result<u16, DeviceGatewayError> {
         match self {
@@ -73,6 +78,7 @@ impl PhysicalType {
             _ => Err(DeviceGatewayError::unsupported("Type is not a Modbus register type")),
         }
     }
+
     pub fn parse(value: &str) -> Result<Self, DeviceGatewayError> {
         Ok(match value.to_ascii_uppercase().as_str() {
             "BOOL" | "DRITBOOL" => Self::Bool,
@@ -92,6 +98,7 @@ impl PhysicalType {
         })
     }
 }
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Operation {
     Read,
@@ -100,6 +107,7 @@ pub enum Operation {
     Poll,
     Unsubscribe,
 }
+
 impl Operation {
     /// The operation of a request type. A `DrtRead` is a single read; the host makes it a [`Self::Poll`] when the
     /// request has a polling interval. The three subscription types are those of PLC4X.
@@ -113,6 +121,7 @@ impl Operation {
         })
     }
 }
+
 /// What makes a subscription send a value, as the PLC4X subscription types: `DrtStateChange` (and the generic
 /// `DrtSubscribe`), `DrtCyclic` and `DrtEvent`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -125,6 +134,7 @@ pub enum SubscriptionType {
     /// An event or a message.
     Event,
 }
+
 impl SubscriptionType {
     pub fn from_enum(value: &str) -> Self {
         match value {
@@ -134,6 +144,7 @@ impl SubscriptionType {
         }
     }
 }
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Protocol {
     ModbusTcp,
@@ -144,11 +155,13 @@ pub enum Protocol {
     /// An EtherCAT segment on a raw Ethernet interface, this host as its MainDevice.
     EtherCat,
 }
+
 #[derive(Clone, Default)]
 pub struct Credentials {
     pub username: Option<String>,
     pub password: Option<String>,
 }
+
 impl fmt::Debug for Credentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Credentials")
@@ -157,6 +170,7 @@ impl fmt::Debug for Credentials {
             .finish()
     }
 }
+
 #[derive(Clone)]
 pub struct Connection {
     pub name: String,
@@ -165,6 +179,7 @@ pub struct Connection {
     pub options: BTreeMap<String, String>,
     pub credentials: Credentials,
 }
+
 impl fmt::Debug for Connection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Connection")
@@ -175,6 +190,7 @@ impl fmt::Debug for Connection {
             .finish()
     }
 }
+
 impl Connection {
     /// The key includes credentials but is never exposed through Debug or diagnostics.
     #[cfg(any(feature = "modbus", feature = "opcua", feature = "ethernetip"))]
@@ -185,6 +201,7 @@ impl Connection {
         )
     }
 }
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParameterKind {
     Numeric,
@@ -192,6 +209,7 @@ pub enum ParameterKind {
     Bits,
     Text,
 }
+
 #[derive(Clone, Debug)]
 pub struct Item {
     pub parameter_id: String,
@@ -202,6 +220,7 @@ pub struct Item {
     pub codec: crate::codec::ValueCodec,
     pub bulk_index: Option<usize>,
 }
+
 #[derive(Clone, Debug)]
 pub struct PreparedDeviceRequest {
     pub name: String,
@@ -219,6 +238,7 @@ pub struct PreparedDeviceRequest {
     pub plc_log: bool,
     pub only_changed: bool,
 }
+
 impl PreparedDeviceRequest {
     pub fn validate(&self) -> Result<(), DeviceGatewayError> {
         if self.name.is_empty() || self.device_id.is_empty() || self.connection.endpoint.is_empty() {
@@ -247,16 +267,19 @@ impl PreparedDeviceRequest {
         }
         Ok(())
     }
+
     pub fn deadline(&self) -> Instant {
         Instant::now() + self.timeout
     }
 }
+
 #[derive(Clone, Debug, Default)]
 pub struct RequestInput {
     pub values: BTreeMap<String, FieldValue>,
     /// A message sent as it is by a write without items (an MQTT publication on the request topic).
     pub payload: Option<Vec<u8>>,
 }
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ItemStatus {
@@ -265,6 +288,7 @@ pub enum ItemStatus {
     Failed,
     Uncertain,
 }
+
 #[derive(Clone, Debug)]
 pub struct ItemResult {
     pub parameter_id: String,
@@ -274,6 +298,7 @@ pub struct ItemResult {
     pub quality: Option<String>,
     pub source_time: Option<SystemTime>,
 }
+
 impl ItemResult {
     pub fn value(id: &str, value: FieldValue) -> Self {
         Self {
@@ -285,6 +310,7 @@ impl ItemResult {
             source_time: None,
         }
     }
+
     pub fn error(id: &str, error: DeviceGatewayError) -> Self {
         Self {
             parameter_id: id.into(),
@@ -300,11 +326,13 @@ impl ItemResult {
         }
     }
 }
+
 #[derive(Clone, Debug, Default)]
 pub struct RequestOutput {
     pub items: Vec<ItemResult>,
     pub subscription_id: Option<String>,
 }
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionOutcome {
     Completed,
@@ -314,6 +342,7 @@ pub enum ExecutionOutcome {
     Uncertain,
     Unchanged,
 }
+
 impl ExecutionOutcome {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -326,6 +355,7 @@ impl ExecutionOutcome {
         }
     }
 }
+
 impl RequestOutput {
     pub fn outcome(&self) -> ExecutionOutcome {
         if self.subscription_id.is_some() {
@@ -349,12 +379,14 @@ impl RequestOutput {
         }
     }
 }
+
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
     pub read: bool,
     pub write: bool,
     pub subscribe: bool,
 }
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorKind {
     Invalid,
@@ -365,12 +397,14 @@ pub enum ErrorKind {
     Persistence,
     Closed,
 }
+
 #[derive(Clone, Debug)]
 pub struct DeviceGatewayError {
     pub kind: ErrorKind,
     pub message: String,
     pub may_have_applied: bool,
 }
+
 impl DeviceGatewayError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
         Self {
@@ -379,15 +413,19 @@ impl DeviceGatewayError {
             may_have_applied: false,
         }
     }
+
     pub fn invalid(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Invalid, message)
     }
+
     pub fn unsupported(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Unsupported, message)
     }
+
     pub fn transport(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Transport, message)
     }
+
     pub fn timeout(writing: bool) -> Self {
         Self {
             kind: ErrorKind::Timeout,
@@ -395,16 +433,19 @@ impl DeviceGatewayError {
             may_have_applied: writing,
         }
     }
+
     pub fn uncertain(mut self) -> Self {
         self.may_have_applied = true;
         self
     }
 }
+
 impl fmt::Display for DeviceGatewayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.message)
     }
 }
+
 impl std::error::Error for DeviceGatewayError {}
 #[derive(Clone, Debug)]
 pub enum LogValueKind {
@@ -412,6 +453,7 @@ pub enum LogValueKind {
     Enumeration,
     Message,
 }
+
 #[derive(Clone, Debug)]
 pub struct Sample {
     pub device_id: String,
@@ -422,6 +464,7 @@ pub struct Sample {
     pub received_time: SystemTime,
     pub quality: Option<String>,
 }
+
 #[derive(Clone, Debug)]
 pub struct SampleBatch {
     pub request_name: String,

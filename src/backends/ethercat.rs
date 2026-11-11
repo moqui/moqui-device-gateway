@@ -29,6 +29,7 @@
 //!
 //! The cycle is not hard real-time: it runs in an ordinary thread, and its jitter is that of the operating system.
 //! Opening a raw interface needs the `CAP_NET_RAW` capability (or root) on Linux.
+
 use crate::{device_facade::DeviceFacade, model::*};
 use async_trait::async_trait;
 use ethercrab::{
@@ -314,7 +315,7 @@ impl Segment {
                 let maindevice = MainDevice::new(pdu_loop, Timeouts::default(), MainDeviceConfig::default());
                 let result = futures_lite::future::block_on(worker.run(&maindevice, cycle));
                 if let Err(e) = &result {
-                    tracing::error!(interface=%interface, error=%e, "EtherCAT segment stopped");
+                    tracing::error!(interface = %interface, error = %e, "EtherCAT segment stopped");
                 }
                 worker.image.lock().unwrap_or_else(|p| p.into_inner()).failed = Some((
                     result.err().unwrap_or_else(|| "EtherCAT segment closed".into()),
@@ -326,13 +327,13 @@ impl Segment {
                 match io.join() {
                     Ok(result) => {
                         if let Err(e) = result {
-                            tracing::error!(interface=%interface, error=?e, "EtherCAT TX/RX stopped with an error");
+                            tracing::error!(interface = %interface, error = ?e, "EtherCAT TX/RX stopped with an error");
                         }
                         // SAFETY: the TX/RX thread has ended and its TX and RX are dropped with `result`.
                         unsafe { storage.free() };
                     }
                     // A panicked TX/RX thread may have left its TX or RX alive: keep the storage.
-                    Err(_) => tracing::error!(interface=%interface, "EtherCAT TX/RX thread panicked"),
+                    Err(_) => tracing::error!(interface = %interface, "EtherCAT TX/RX thread panicked"),
                 }
             })
             .map_err(|e| {
@@ -471,6 +472,7 @@ impl DeviceFacade for EtherCatDeviceClient {
             subscribe: false,
         }
     }
+
     async fn execute(
         &self,
         r: &PreparedDeviceRequest,
@@ -601,6 +603,7 @@ impl DeviceFacade for EtherCatDeviceClient {
         }
         Ok(())
     }
+
     async fn close(&self) {
         for segment in std::mem::take(&mut *self.segments.lock().await).into_values() {
             segment.stop.store(true, Ordering::Release);

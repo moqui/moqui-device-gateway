@@ -21,6 +21,7 @@
 //! Any Rust host creates one with a Tokio runtime. Under the `moqui` feature, [`DeviceGatewayToolFactory`] holds one
 //! for MR-Moqui, and `binding` implements the service run#DeviceGatewayRequest (service/moqui/device/gateway), as
 //! moqui-plc4j's run#Plc4jRequest did; the persistence and notifications are those of moqui-device.
+
 pub mod backends;
 #[cfg(feature = "moqui")]
 pub mod binding;

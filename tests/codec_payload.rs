@@ -16,9 +16,11 @@ mod common;
 use moqui_device_gateway::{codec::ValueCodec, payload, *};
 use rust_decimal::Decimal;
 use std::str::FromStr;
+
 fn d(s: &str) -> Decimal {
     Decimal::from_str(s).unwrap()
 }
+
 #[test]
 fn zero_bounds_scale_offset_and_inverse() {
     let codec = ValueCodec {
@@ -42,6 +44,7 @@ fn zero_bounds_scale_offset_and_inverse() {
         FieldValue::Unsigned(500)
     );
 }
+
 #[test]
 fn a_write_beyond_the_parameter_bounds_is_refused() {
     let codec = ValueCodec {
@@ -76,6 +79,7 @@ fn a_write_beyond_the_parameter_bounds_is_refused() {
         FieldValue::Decimal(d("100"))
     );
 }
+
 #[test]
 fn half_up_zero_digits_and_signed_rounding() {
     let c = ValueCodec {
@@ -88,6 +92,7 @@ fn half_up_zero_digits_and_signed_rounding() {
         FieldValue::Decimal(d("-3"))
     );
 }
+
 #[test]
 fn integer_and_json_precision() {
     let c = ValueCodec::default();
@@ -100,6 +105,7 @@ fn integer_and_json_precision() {
     let v = FieldValue::Decimal(d("12345678901234567890.12345678"));
     assert_eq!(payload::from_json(&payload::to_json(&v).unwrap()).unwrap(), v);
 }
+
 #[test]
 fn invalid_values_never_silently_coerce() {
     let c = ValueCodec::default();
@@ -117,6 +123,7 @@ fn invalid_values_never_silently_coerce() {
     .validate()
     .is_err());
 }
+
 #[test]
 fn indicator_reverse_is_symmetric() {
     let c = ValueCodec {
@@ -130,10 +137,17 @@ fn indicator_reverse_is_symmetric() {
         FieldValue::Bool(true)
     );
 }
+
 #[test]
 fn plc_logs_preserve_identity_enum_and_device_event() {
     let r = common::request(Protocol::Mqtt, "mqtt://localhost".into(), Operation::Subscribe);
-    let b=payload::plc_log_batch(&r,br#"{"1":{"loggerName":"test-device","source":"exact-id","type":1,"numericValue":18446744073709551615,"logEventDate":"DT#2026-10-18-12:30:00"},"2":{"loggerName":"test-device","source":"","type":3,"message":"started"},"3":{"loggerName":"test-device","source":"status","type":2,"enumValue":"0010"}}"#).unwrap();
+    let events = br#"{
+        "1": {"loggerName": "test-device", "source": "exact-id", "type": 1, "numericValue": 18446744073709551615,
+              "logEventDate": "DT#2026-10-18-12:30:00"},
+        "2": {"loggerName": "test-device", "source": "", "type": 3, "message": "started"},
+        "3": {"loggerName": "test-device", "source": "status", "type": 2, "enumValue": "0010"}
+    }"#;
+    let b = payload::plc_log_batch(&r, events).unwrap();
     assert_eq!(b.samples[0].parameter_id.as_deref(), Some("exact-id"));
     assert_eq!(b.samples[0].value, FieldValue::Unsigned(u64::MAX));
     assert!(b.samples[0].source_time.is_some());
@@ -144,6 +158,7 @@ fn plc_logs_preserve_identity_enum_and_device_event() {
     let child = payload::plc_log_batch(&r, br#"{"1":{"loggerName":"child-device","message":"event"}}"#).unwrap();
     assert_eq!(child.samples[0].device_id, "child-device");
 }
+
 #[test]
 fn connection_debug_redacts_credentials_and_legacy_uri_secrets() {
     let mut r = common::request(Protocol::Mqtt, "mqtt://name:secret@localhost".into(), Operation::Read);
@@ -152,6 +167,7 @@ fn connection_debug_redacts_credentials_and_legacy_uri_secrets() {
     let debug = format!("{:?}", r);
     assert!(!debug.contains("secret"));
 }
+
 #[test]
 fn mqtt_inbound_accepts_legacy_scalars_envelopes_and_rows_but_not_wrong_ids() {
     let r = common::request(Protocol::Mqtt, "mqtt://localhost".into(), Operation::Read);
@@ -166,6 +182,7 @@ fn mqtt_inbound_accepts_legacy_scalars_envelopes_and_rows_but_not_wrong_ids() {
     let out = payload::read_payload(&r, br#"{"parameterId":"other","numericValue":10}"#).unwrap();
     assert_eq!(out[0].status, ItemStatus::Failed);
 }
+
 #[test]
 fn mqtt_bit_and_indicator_envelopes_match_gateway_fields() {
     let mut r = common::request(Protocol::Mqtt, "mqtt://localhost".into(), Operation::Write);

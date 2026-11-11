@@ -76,6 +76,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
 struct Reader(AtomicUsize);
 #[async_trait]
 impl DeviceFacade for Reader {
@@ -86,6 +87,7 @@ impl DeviceFacade for Reader {
             subscribe: false,
         }
     }
+
     async fn execute(
         &self,
         _: &PreparedDeviceRequest,
@@ -99,12 +101,14 @@ impl DeviceFacade for Reader {
         Ok(())
     }
 }
+
 struct Sink;
 impl SampleSink for Sink {
     fn emit(&self, _: SampleBatch) -> Result<(), DeviceGatewayError> {
         Ok(())
     }
 }
+
 #[tokio::test]
 async fn ownership_cancellation_and_shutdown() {
     let reader = Arc::new(Reader(AtomicUsize::new(0)));
@@ -183,6 +187,7 @@ async fn ownership_cancellation_and_shutdown() {
         ErrorKind::Closed
     );
 }
+
 #[tokio::test]
 async fn event_subscription_does_not_silently_become_polling() {
     let reader = Arc::new(Reader(AtomicUsize::new(0)));
@@ -206,6 +211,7 @@ async fn event_subscription_does_not_silently_become_polling() {
         .unwrap_err();
     assert_eq!(e.kind, ErrorKind::Unsupported);
 }
+
 struct PartialReader;
 #[async_trait]
 impl DeviceFacade for PartialReader {
@@ -216,6 +222,7 @@ impl DeviceFacade for PartialReader {
             subscribe: false,
         }
     }
+
     async fn execute(
         &self,
         _: &PreparedDeviceRequest,
@@ -228,6 +235,7 @@ impl DeviceFacade for PartialReader {
         Err(DeviceGatewayError::transport("second item failed"))
     }
 }
+
 #[tokio::test]
 async fn partial_read_decodes_successes_and_marks_missing_items() {
     let mut r = common::request(Protocol::ModbusTcp, "localhost:502".into(), Operation::Read);

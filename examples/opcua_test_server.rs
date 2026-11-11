@@ -13,10 +13,12 @@
  */
 
 //! The OPC UA server of the OPC UA specs (test/DeviceGateway.spec.js, gateway_opcua_test): the Milo test server of
-//! the former gateway tests, at opc.tcp://127.0.0.1:12686/milo with the writable nodes ns=2;s=Demo.Dynamic.Scalar.Double
-//! and ns=2;s=Demo.Dynamic.Scalar.Boolean that moqui-device's DeviceTestData.xml requests use. Anonymous, no security.
+//! the former gateway tests, at opc.tcp://127.0.0.1:12686/milo with the writable nodes
+//! ns=2;s=Demo.Dynamic.Scalar.Double and ns=2;s=Demo.Dynamic.Scalar.Boolean that moqui-device's DeviceTestData.xml
+//! requests use. Anonymous, no security.
 //!
 //!     cargo run --example opcua_test_server [port] [pki-directory]
+
 use opcua::{
     nodes::{AccessLevel, Variable},
     server::{

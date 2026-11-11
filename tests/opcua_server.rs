@@ -14,6 +14,7 @@
 
 //! The OPC UA backend against an in-process OPC UA server: the read, write and subscription cases of the former
 //! gateway's OpcUaGatewayIntegrationTest (Milo server), here with async-opcua's server.
+
 #![cfg(feature = "opcua")]
 mod common;
 use moqui_device_gateway::*;
@@ -39,6 +40,7 @@ struct TestServer {
     endpoint: String,
     _pki: tempfile::TempDir,
 }
+
 impl TestServer {
     async fn start() -> Self {
         let pki = tempfile::tempdir().unwrap();
@@ -95,6 +97,7 @@ impl TestServer {
             _pki: pki,
         }
     }
+
     fn request(&self, operation: Operation) -> Arc<PreparedDeviceRequest> {
         let mut r = common::request(Protocol::OpcUa, self.endpoint.clone(), operation);
         r.items[0].address = format!("ns={};s=Temperature", self.namespace);
@@ -105,6 +108,7 @@ impl TestServer {
         r.timeout = Duration::from_secs(10);
         Arc::new(r)
     }
+
     fn set(&self, value: f64) {
         let manager = self.handle.node_managers().get_of_type::<SimpleNodeManager>().unwrap();
         manager
@@ -116,6 +120,7 @@ impl TestServer {
             )
             .unwrap();
     }
+
     fn value(&self) -> Variant {
         let manager = self.handle.node_managers().get_of_type::<SimpleNodeManager>().unwrap();
         let space = manager.address_space().read();
@@ -134,11 +139,13 @@ impl TestServer {
         }
     }
 }
+
 impl Drop for TestServer {
     fn drop(&mut self) {
         self.handle.cancel();
     }
 }
+
 struct VecSink(Mutex<Vec<SampleBatch>>);
 impl SampleSink for VecSink {
     fn emit(&self, batch: SampleBatch) -> Result<(), DeviceGatewayError> {
