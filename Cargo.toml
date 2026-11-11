@@ -8,7 +8,7 @@ publish = false
 
 [features]
 default = ["moqui", "mqtt", "opcua", "modbus", "ethernetip", "ethercat"]
-moqui = ["dep:moqui-core", "dep:moqui-lib", "dep:indexmap", "dep:jiff"]
+moqui = ["dep:moqui-core", "dep:moqui-lib", "dep:jiff"]
 mqtt = ["dep:rumqttc"]
 opcua = ["dep:opcua"]
 modbus = ["dep:tokio-modbus"]
@@ -18,7 +18,6 @@ ethercat = ["dep:ethercrab", "dep:futures-lite"]
 [dependencies]
 moqui-core = { path = "../../../crates/moqui-core", default-features = false, optional = true }
 moqui-lib = { path = "../../../crates/moqui-lib", optional = true }
-indexmap = { version = "2", optional = true }
 jiff = { version = "0.2", optional = true }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "fs", "macros"] }

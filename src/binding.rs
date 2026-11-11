@@ -586,12 +586,17 @@ fn item_result_value(i: &ItemResult) -> Value {
         ItemStatus::Failed => "failed",
         ItemStatus::Uncertain => "uncertain",
     };
-    Value::Map(indexmap::indexmap! {
-        "parameterId".into() => Value::string(&i.parameter_id),
-        "status".into() => Value::string(status),
-        "value".into() => i.value.as_ref().map(to_value).unwrap_or(Value::Null),
-        "error".into() => i.error.as_ref().map(Value::string).unwrap_or(Value::Null),
-    })
+    map([
+        ("parameterId", Value::string(&i.parameter_id)),
+        ("status", Value::string(status)),
+        ("value", i.value.as_ref().map(to_value).unwrap_or(Value::Null)),
+        ("error", i.error.as_ref().map(Value::string).unwrap_or(Value::Null)),
+    ])
+}
+
+/// A map value with its fields in the order given.
+fn map<const N: usize>(fields: [(&str, Value); N]) -> Value {
+    Value::Map(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
 }
 
 pub fn to_value(v: &FieldValue) -> Value {
@@ -625,24 +630,29 @@ fn optional_text(value: Option<&String>) -> Value {
 }
 
 fn sample_to_value(s: &Sample) -> Result<Value, Error> {
-    Ok(Value::Map(indexmap::indexmap! {
-        "deviceId".into() => Value::string(&s.device_id),
-        "parameterId".into() => optional_text(s.parameter_id.as_ref()),
-        "value".into() => to_value(&s.value),
-        "sourceTime".into() => s.source_time.map(timestamp).transpose()?.unwrap_or(Value::Null),
-        "receivedTime".into() => timestamp(s.received_time)?,
-        "quality".into() => optional_text(s.quality.as_ref()),
-        "sequenceNum".into() => match &s.value {
-            FieldValue::Record(event) => event.get("sequenceNum").map(to_value).unwrap_or(Value::Null),
-            _ => Value::Null,
-        },
-        "logValueKind".into() => match s.log_value_kind {
-            Some(LogValueKind::Numeric) => Value::string("numeric"),
-            Some(LogValueKind::Enumeration) => Value::string("enumeration"),
-            Some(LogValueKind::Message) => Value::string("message"),
-            None => Value::Null,
-        },
-    }))
+    let sequence_num = match &s.value {
+        FieldValue::Record(event) => event.get("sequenceNum").map(to_value).unwrap_or(Value::Null),
+        _ => Value::Null,
+    };
+    let log_value_kind = match s.log_value_kind {
+        Some(LogValueKind::Numeric) => Value::string("numeric"),
+        Some(LogValueKind::Enumeration) => Value::string("enumeration"),
+        Some(LogValueKind::Message) => Value::string("message"),
+        None => Value::Null,
+    };
+    Ok(map([
+        ("deviceId", Value::string(&s.device_id)),
+        ("parameterId", optional_text(s.parameter_id.as_ref())),
+        ("value", to_value(&s.value)),
+        (
+            "sourceTime",
+            s.source_time.map(timestamp).transpose()?.unwrap_or(Value::Null),
+        ),
+        ("receivedTime", timestamp(s.received_time)?),
+        ("quality", optional_text(s.quality.as_ref())),
+        ("sequenceNum", sequence_num),
+        ("logValueKind", log_value_kind),
+    ]))
 }
 
 /// Calls a store service with the samples (as [`sample_to_value`] gives them) and returns its results; an error the
