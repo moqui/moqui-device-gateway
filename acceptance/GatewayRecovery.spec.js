@@ -114,7 +114,7 @@ feature('restart: persisted requests restore subscriptions in a new native host 
     when() {
         // Published while no gateway ran: the persistent session kept them in the broker.
         control('burst',{topic:TOPIC,start:400000,count:200});
-        const restored = call('moqui.device.DeviceAcquisitionServices.start#Subscriptions',{maxAttempts:3,retryDelayMillis:0});
+        const restored = call('moqui.device.DeviceAcquisitionServices.start#Subscriptions',{retryDelayMillis:0});
         control('publish',{topic:TOPIC,value:300001,repeat:3});
         waitFor(() => seen(300001) && inRange(400000,200) >= 200);
         return {restored,received:seen(300001),whileDown:inRange(400000,200)};

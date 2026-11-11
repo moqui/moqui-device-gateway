@@ -7,7 +7,7 @@ not depend on the protocol, following the
 [PLC4X concepts](https://plc4x.apache.org/plc4x/latest/users/getting-started/general-concepts.html):
 a connection string `{driver code}:{transport code}://{transport config}?{options}`
 and tag addresses `type:address`. Modern fieldbuses only: Modbus TCP, OPC UA,
-MQTT, EtherNet/IP and EtherCAT now; PROFINET, BACnet and Modbus TLS to come.
+MQTT, EtherNet/IP and EtherCAT; BACnet and Modbus TLS may follow.
 Files are not a fieldbus: moqui-device moves them with mr-moqui's resources and
 SFTP.
 
@@ -201,10 +201,9 @@ QoS 1 or 2.
 ## Values and writes
 
 * Numeric conversions use Decimal; zero bounds and zero significant digits are
-  meaningful, a zero scaling is rejected. A value beyond the `minValue` or
-  `maxValue` of its ParameterDef is limited to that bound, on a read and before
-  a write. An out-of-range write, or a fractional
-  write to an integer physical type, fails instead of truncating.
+  meaningful, a zero scaling is rejected. A value read beyond the `minValue` or
+  `maxValue` of its ParameterDef is limited to that bound; a value to write
+  beyond them is refused, and nothing is sent.
 * Modbus indexed bulk items share one response. A bulk write needs complete,
   unique indices for each array and sends one ordered PDU per bulk address. All
   values and PDU limits are checked before connecting.
@@ -218,8 +217,10 @@ QoS 1 or 2.
 
 ## Further protocols
 
-PROFINET, BACnet and the other `DeviceConnectionDriver` values are not
-implemented yet. `DeviceFacade` is the extension point; choosing a
+BACnet and the other `DeviceConnectionDriver` values are not implemented.
+PROFINET is not covered: the Rust stack examined (pnio-rs) is an IO-Device,
+which would make this host a device of the PLC rather than let it reach
+PROFINET devices. `DeviceFacade` is the extension point; choosing a
 library requires checking its role (controller/device), licensing, supported
 services and hardware requirements. Do not infer support from an enumeration or
 a protocol name.

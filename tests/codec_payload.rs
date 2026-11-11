@@ -43,6 +43,40 @@ fn zero_bounds_scale_offset_and_inverse() {
     );
 }
 #[test]
+fn a_write_beyond_the_parameter_bounds_is_refused() {
+    let codec = ValueCodec {
+        logical_min: Some(d("-10")),
+        logical_max: Some(d("100")),
+        ..Default::default()
+    };
+    for value in ["100.01", "-10.5"] {
+        let error = codec
+            .encode(
+                &FieldValue::Decimal(d(value)),
+                ParameterKind::Numeric,
+                PhysicalType::F64,
+            )
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Invalid, "{value}");
+        assert!(error.message.contains("-10..100"), "{}", error.message);
+    }
+    assert_eq!(
+        codec
+            .encode(
+                &FieldValue::Decimal(d("100")),
+                ParameterKind::Numeric,
+                PhysicalType::F64
+            )
+            .unwrap(),
+        FieldValue::Float(100.0)
+    );
+    // A value read beyond the bounds is limited to them.
+    assert_eq!(
+        codec.decode(&FieldValue::Float(120.0), ParameterKind::Numeric).unwrap(),
+        FieldValue::Decimal(d("100"))
+    );
+}
+#[test]
 fn half_up_zero_digits_and_signed_rounding() {
     let c = ValueCodec {
         digits: Some(0),

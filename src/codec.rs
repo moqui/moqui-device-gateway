@@ -67,6 +67,7 @@ impl ValueCodec {
         }
         Ok(())
     }
+    /// A value read is limited to the bounds of its parameter.
     fn clamp(&self, mut n: Decimal) -> Decimal {
         if let Some(v) = self.logical_min {
             n = n.max(v);
@@ -133,7 +134,16 @@ impl ValueCodec {
         }
         let mut n = value.decimal()?;
         if kind == ParameterKind::Numeric {
-            n = self.clamp(n);
+            // A setpoint beyond the bounds of its parameter is refused, never limited: the machine gets the value
+            // asked for or nothing.
+            if self.logical_min.is_some_and(|min| n < min) || self.logical_max.is_some_and(|max| n > max) {
+                let bound = |b: Option<Decimal>| b.map_or("-".to_string(), |b| b.to_string());
+                return Err(DeviceGatewayError::invalid(format!(
+                    "Value {n} is outside the range {}..{} of the parameter",
+                    bound(self.logical_min),
+                    bound(self.logical_max)
+                )));
+            }
             n = checked(checked(n.checked_sub(self.offset))?.checked_div(self.scale))?;
             if let (Some(a), Some(b), Some(c), Some(d)) =
                 (self.logical_min, self.logical_max, self.physical_min, self.physical_max)
