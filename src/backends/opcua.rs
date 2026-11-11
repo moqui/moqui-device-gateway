@@ -12,7 +12,9 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
-//! OPC UA sessions and native data-change subscriptions. No writes are replayed.
+//! OPC UA with async-opcua: reads and writes on a session shared per connection, and subscriptions of monitored items
+//! on a session of their own, so that ending one cannot affect other requests. A lost subscription session ends the
+//! subscription; moqui-device's start#Subscriptions starts it again. No write is sent twice.
 use crate::{
     device_facade::{DeviceFacade, SampleSink},
     model::*,
@@ -184,12 +186,12 @@ async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<Session
     let endpoint: EndpointDescription = (c.endpoint.as_str(), policy.as_str(), mode, token).into();
     let mut client = builder
         .client()
-        .map_err(|_| DeviceGatewayError::invalid("Invalid OPC UA client configuration"))?;
+        .map_err(|e| DeviceGatewayError::invalid(format!("Invalid OPC UA client configuration: {e:?}")))?;
     let (session, event_loop) =
         tokio::time::timeout_at(deadline.into(), client.connect_to_matching_endpoint(endpoint, identity))
             .await
             .map_err(|_| DeviceGatewayError::timeout(false))?
-            .map_err(|_| DeviceGatewayError::transport("OPC UA endpoint connection failed"))?;
+            .map_err(|e| DeviceGatewayError::transport(format!("OPC UA endpoint connection failed: {e}")))?;
     let guard = SessionGuard {
         session: session.clone(),
         task: event_loop.spawn(),
@@ -273,7 +275,7 @@ impl DeviceFacade for OpcUaDeviceClient {
             let statuses = tokio::time::timeout_at(deadline.into(), s.write(&writes))
                 .await
                 .map_err(|_| DeviceGatewayError::timeout(true))?
-                .map_err(|_| DeviceGatewayError::transport("OPC UA write failed").uncertain())?;
+                .map_err(|e| DeviceGatewayError::transport(format!("OPC UA write failed: {e}")).uncertain())?;
             if statuses.len() != r.items.len() {
                 return Err(DeviceGatewayError::transport("OPC UA write result count differs").uncertain());
             }
@@ -292,7 +294,7 @@ impl DeviceFacade for OpcUaDeviceClient {
             let values = tokio::time::timeout_at(deadline.into(), s.read(&nodes, TimestampsToReturn::Both, 0.0))
                 .await
                 .map_err(|_| DeviceGatewayError::timeout(false))?
-                .map_err(|_| DeviceGatewayError::transport("OPC UA read failed"))?;
+                .map_err(|e| DeviceGatewayError::transport(format!("OPC UA read failed: {e}")))?;
             if values.len() != r.items.len() {
                 return Err(DeviceGatewayError::transport("OPC UA read result count differs"));
             }
@@ -329,7 +331,7 @@ impl DeviceFacade for OpcUaDeviceClient {
             _ => 0.0,
         };
         // A subscription owns a dedicated session, so cancellation cannot affect other requests.
-        let guard = connect(&r, deadline).await?;
+        let mut guard = connect(&r, deadline).await?;
         let req = r.clone();
         let ids = nodes.clone();
         let callback = DataChangeCallback::new(move |value: DataValue, item: &MonitoredItem| {
@@ -338,7 +340,8 @@ impl DeviceFacade for OpcUaDeviceClient {
             };
             let value = result(&req.items[index].parameter_id, value);
             if let Some(error) = value.error {
-                tracing::error!(request=%req.name,error=%error,"OPC UA sample rejected");
+                // A bad quality goes to the store as an acquisition error, which logs and notifies it.
+                tracing::debug!(request=%req.name, error=%error, "OPC UA sample without a good value");
                 let _ = sink.emit(SampleBatch {
                     request_name: req.name.clone(),
                     errors: vec![format!("{}: {}", value.parameter_id, error)],
@@ -376,7 +379,7 @@ impl DeviceFacade for OpcUaDeviceClient {
         )
         .await
         .map_err(|_| DeviceGatewayError::timeout(false))?
-        .map_err(|_| DeviceGatewayError::transport("Cannot create OPC UA subscription"))?;
+        .map_err(|e| DeviceGatewayError::transport(format!("Cannot create OPC UA subscription: {e}")))?;
         let items = nodes
             .into_iter()
             .map(|n| {
@@ -396,12 +399,28 @@ impl DeviceFacade for OpcUaDeviceClient {
         )
         .await
         .map_err(|_| DeviceGatewayError::timeout(false))?
-        .map_err(|_| DeviceGatewayError::transport("Cannot create OPC UA monitored items"))?;
-        if results.len() != r.items.len() || results.iter().any(|i| !i.result.status_code.is_good()) {
-            return Err(DeviceGatewayError::transport("OPC UA rejected monitored items"));
+        .map_err(|e| DeviceGatewayError::transport(format!("Cannot create OPC UA monitored items: {e}")))?;
+        if results.len() != r.items.len() {
+            return Err(DeviceGatewayError::transport("OPC UA monitored item count differs"));
+        }
+        if let Some((item, rejected)) = r
+            .items
+            .iter()
+            .zip(&results)
+            .find(|(_, i)| !i.result.status_code.is_good())
+        {
+            return Err(DeviceGatewayError::transport(format!(
+                "OPC UA rejected the monitored item of {}: {}",
+                item.parameter_id, rejected.result.status_code
+            )));
         }
         Ok(tokio::spawn(async move {
-            tokio::select! {_=cancel.cancelled()=>{},_ = async {while !guard.task.is_finished(){tokio::time::sleep(Duration::from_millis(100)).await;}}=>{tracing::error!(request=%r.name,"OPC UA subscription session stopped");}}
+            tokio::select! {
+                _ = cancel.cancelled() => {}
+                _ = &mut guard.task => {
+                    tracing::error!(request=%r.name, "OPC UA subscription session stopped");
+                }
+            }
             let _ = tokio::time::timeout(Duration::from_secs(2), guard.session.delete_subscriptions(&[sub])).await;
             let _ = tokio::time::timeout(Duration::from_secs(2), guard.session.disconnect()).await;
         }))

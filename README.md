@@ -102,6 +102,9 @@ subscription type on them is an error.
 Browse/discovery, structured OPC UA values, OPC UA events and Modbus TLS are not
 implemented. An unsupported request is an error; there is no fallback protocol.
 
+Polling logs when a device stops and starts answering again, not every failed
+cycle; each failure still reaches the store, which notifies a lasting one.
+
 All timeouts and polling intervals are milliseconds. One deadline covers session
 acquisition and all items. A timed-out write is `uncertain` and is never resent
 by the library. MQTT PUBACK confirms broker acceptance, not application of a
@@ -124,7 +127,10 @@ setpoint by the target device; QoS 0 only confirms local transmission.
   such as `ns=2;s=Temperature`. Options are `securityPolicy`, `securityMode`,
   `pkiDir`, `certificateFile`, `privateKeyFile`, `applicationUri`. Secure modes
   require client credentials and pretrusted server certificates; username
-  authentication requires `SignAndEncrypt`.
+  authentication requires `SignAndEncrypt`. Reads and writes share a session per
+  connection; each subscription has a session of its own, and a lost session
+  ends the subscription until moqui-device's `start#Subscriptions` starts it
+  again.
 * EtherNet/IP: endpoint `logix://host` or `eip://host` (port 44818 by default),
   option `slot=0` for the backplane slot of the controller. CIP explicit
   messaging to the symbolic tags of Allen-Bradley Logix controllers
@@ -145,7 +151,11 @@ setpoint by the target device; QoS 0 only confirms local transmission.
   while a SubDevice is not in OP; a write changes the outputs and completes once
   two cycles have sent them. Only outputs are written. The mapping (PDOs) is the
   default of each SubDevice; SDO configuration and distributed clocks are not
-  exposed. A raw socket needs `CAP_NET_RAW` (or root) on Linux, and the cycle is
+  exposed. The first request on an interface fixes its cycle, and a request with
+  another `cycle-time-us` is refused. A segment that stops on an error is
+  started again by a request at least five seconds later. When the host closes,
+  the SubDevices go to SAFE-OP and INIT: the outputs are no longer driven and
+  each SubDevice applies its own safe state. A raw socket needs `CAP_NET_RAW` (or root) on Linux, and the cycle is
   as regular as the operating system makes an ordinary thread: no hard
   real-time.
 
@@ -191,7 +201,9 @@ QoS 1 or 2.
 ## Values and writes
 
 * Numeric conversions use Decimal; zero bounds and zero significant digits are
-  meaningful, a zero scaling is rejected. An out-of-range write, or a fractional
+  meaningful, a zero scaling is rejected. A value beyond the `minValue` or
+  `maxValue` of its ParameterDef is limited to that bound, on a read and before
+  a write. An out-of-range write, or a fractional
   write to an integer physical type, fails instead of truncating.
 * Modbus indexed bulk items share one response. A bulk write needs complete,
   unique indices for each array and sends one ordered PDU per bulk address. All

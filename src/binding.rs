@@ -532,17 +532,20 @@ fn run_request(ec: &ExecutionContext, params: &Parameters, service: ServiceKind)
         .iter()
         .map(sample_to_value)
         .collect::<Result<Vec<_>, _>>()?;
-    let stored_count = if read_samples.is_empty() {
+    let stored_count = if samples.is_empty() {
         Value::I64(0)
     } else {
-        let stored = call_store(ec, STORE_SAMPLES, &request.name, request.logging, &read_samples, &[])?;
+        let stored = call_store(ec, STORE_SAMPLES, &request.name, request.logging, samples.clone(), &[])?;
         stored.get("storedCount").cloned().unwrap_or(Value::I64(0))
     };
     let mut result = Parameters::new();
     result.insert("status".into(), Value::string(status.as_str()));
     result.insert("samples".into(), Value::List(samples));
     result.insert("storedCount".into(), stored_count);
-    result.insert("itemResults".into(),Value::List(output.items.iter().map(|i|Value::Map(indexmap::indexmap!{"parameterId".into()=>Value::string(&i.parameter_id),"status".into()=>Value::string(match i.status{ItemStatus::Completed=>"completed",ItemStatus::Unchanged=>"unchanged",ItemStatus::Failed=>"failed",ItemStatus::Uncertain=>"uncertain"}),"value".into()=>i.value.as_ref().map(to_value).unwrap_or(Value::Null),"error".into()=>i.error.as_ref().map(Value::string).unwrap_or(Value::Null)})).collect()));
+    result.insert(
+        "itemResults".into(),
+        Value::List(output.items.iter().map(item_result_value).collect()),
+    );
     result.insert(
         "subscriptionId".into(),
         output.subscription_id.map(Value::string).unwrap_or(Value::Null),
@@ -552,6 +555,21 @@ fn run_request(ec: &ExecutionContext, params: &Parameters, service: ServiceKind)
         execution.err().map(|e| Value::string(e.message)).unwrap_or(Value::Null),
     );
     Ok(result)
+}
+/// An item result as the service returns it: parameterId, status, value and error.
+fn item_result_value(i: &ItemResult) -> Value {
+    let status = match i.status {
+        ItemStatus::Completed => "completed",
+        ItemStatus::Unchanged => "unchanged",
+        ItemStatus::Failed => "failed",
+        ItemStatus::Uncertain => "uncertain",
+    };
+    Value::Map(indexmap::indexmap! {
+        "parameterId".into() => Value::string(&i.parameter_id),
+        "status".into() => Value::string(status),
+        "value".into() => i.value.as_ref().map(to_value).unwrap_or(Value::Null),
+        "error".into() => i.error.as_ref().map(Value::string).unwrap_or(Value::Null),
+    })
 }
 pub fn to_value(v: &FieldValue) -> Value {
     match v {
@@ -600,13 +618,14 @@ fn sample_to_value(s: &Sample) -> Result<Value, Error> {
         },
     }))
 }
-/// Calls a store service with the samples and returns its results; an error the service recorded is an error here.
+/// Calls a store service with the samples (as [`sample_to_value`] gives them) and returns its results; an error the
+/// service recorded is an error here.
 fn call_store(
     ec: &ExecutionContext,
     service: &str,
     request_name: &str,
     logging: bool,
-    samples: &[Sample],
+    samples: Vec<Value>,
     errors: &[String],
 ) -> Result<Parameters, Error> {
     let mut params = Parameters::new();
@@ -617,10 +636,7 @@ fn call_store(
         "acquisitionErrors".into(),
         Value::List(errors.iter().map(Value::string).collect()),
     );
-    params.insert(
-        "samples".into(),
-        Value::List(samples.iter().map(sample_to_value).collect::<Result<_, _>>()?),
-    );
+    params.insert("samples".into(), Value::List(samples));
     call_service(ec, service, &params)
 }
 /// Calls a service; an error it recorded in the message facade is an error here.
@@ -716,12 +732,17 @@ pub(crate) enum Stored {
 /// The persistence worker's path: subscription and polling samples go through the store services.
 pub(crate) fn store_batch(ec: &ExecutionContext, batch: &SampleBatch) -> Result<Stored, Error> {
     let plc_log = batch.request.as_ref().is_some_and(|r| r.plc_log);
+    let samples = batch
+        .samples
+        .iter()
+        .map(sample_to_value)
+        .collect::<Result<Vec<_>, _>>()?;
     let out = call_store(
         ec,
         if plc_log { STORE_PLC_LOG } else { STORE_SAMPLES },
         &batch.request_name,
         batch.logging,
-        &batch.samples,
+        samples,
         &batch.errors,
     )?;
     let count = |name: &str| match out.get(name) {

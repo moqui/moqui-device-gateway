@@ -22,20 +22,24 @@ along with this software (see the LICENSE.md file). If not, see
     <service verb="run" noun="DeviceGatewayRequest" type="rust" location="moqui_device_gateway::binding::run_device_gateway_request"
             authenticate="false" transaction="ignore">
         <description>
-            Runs a DeviceRequest on the driver of its connection: DeviceConnection.driverEnumId (DcdMqtt, DcdOpcUa,
-            DcdModbusTCP, etc.), else the scheme of DeviceRequest.brokerUri or DeviceConnection.transportConfig (mqtt://,
-            mqtts://, paho-mqtt5:?brokerUrl=..., opc.tcp://, modbus-tcp://). Set it as DeviceRequest.runServiceName, as
+            Runs a DeviceRequest on the driver of its connection: DeviceConnection.driverEnumId (DcdModbusTCP, DcdOpcUa,
+            DcdMqtt, DcdLogixCIPEIP or DcdEthernetIP, DcdEtherCAT), else the scheme of DeviceRequest.brokerUri or
+            DeviceConnection.transportConfig (modbus-tcp://, opc.tcp://, mqtt://, mqtts://, paho-mqtt5:?brokerUrl=...,
+            logix://, eip://, ethercat://). Set it as DeviceRequest.runServiceName, as
             moqui.plc4j.Plc4jServices.run#Plc4jRequest was; moqui.device.DeviceServices.run#DeviceRequest calls it.
 
-            DrtRead reads the items and stores the values (DeviceAcquisitionServices.store#Samples). DrtWrite writes the values of the item
-            Parameters; an MQTT write without items publishes the payload parameter as JSON on DeviceRequest.query.
-            DrtSubscribe, DrtEvent and DrtStateChange subscribe, DrtCyclic polls at pollingInterval (an MQTT DrtCyclic
-            subscribes); what arrives is stored through the sample queue. DrtUnsubscribe stops the subscription of
+            DrtRead reads the items once and stores the values (DeviceAcquisitionServices.store#Samples); with a
+            pollingInterval it polls: it reads again every pollingInterval milliseconds until a DrtUnsubscribe. MQTT has
+            no read. DrtWrite writes the values of the item Parameters; an MQTT write without items publishes the
+            payload parameter as JSON on DeviceRequest.query. DrtStateChange, DrtCyclic and DrtEvent subscribe (the
+            PLC4X subscription types; DrtSubscribe is the default of the protocol): on OPC UA as monitored items, a
+            DrtCyclic one sampled every pollingInterval; on MQTT as broker subscriptions, with no DrtCyclic. Polled and
+            received values are stored through the sample queue. DrtUnsubscribe stops the subscription or polling of
             parentRequestName.
 
-            The item address is DeviceRequestItem.query, else DeviceRequest.query: an MQTT topic, an OPC UA node id, a
-            Modbus register. With the property device_gateway_device_id set, a device outside the scope of that gateway
-            is refused (DeviceAcquisitionServices.get#GatewayScope).
+            The item address is DeviceRequestItem.query, else DeviceRequest.query: a Modbus register, an OPC UA node id,
+            an MQTT topic, a Logix tag, an EtherCAT process data offset. With the property device_gateway_device_id set,
+            a device outside the scope of that gateway is refused (DeviceAcquisitionServices.get#GatewayScope).
         </description>
         <implements service="moqui.device.DeviceServices.run#DeviceRequestInternal"/>
         <in-parameters>
@@ -56,8 +60,8 @@ along with this software (see the LICENSE.md file). If not, see
         <description>
             PLC log events over MQTT: a DrtSubscribe or DrtEvent request whose topic (DeviceRequest.query) carries the log
             events of the moqui-plc LoggerFacade. An event with a source is stored as a ParameterLog of that Parameter, an
-            event without one as a DeviceLog (DeviceAcquisitionServices.store#LogSamples). The loggerName of each event must be the deviceId
-            of the request. DrtUnsubscribe stops it. Set as DeviceRequest.runServiceName.
+            event without one as a DeviceLog (DeviceAcquisitionServices.store#LogSamples). The loggerName of each event is the device: the device
+            of the request or one of the members of its DeviceGroups. DrtUnsubscribe stops it. Set as DeviceRequest.runServiceName.
         </description>
         <implements service="moqui.device.DeviceServices.run#DeviceRequestInternal"/>
         <out-parameters>

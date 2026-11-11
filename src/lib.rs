@@ -14,9 +14,10 @@
 
 //! Field communication drivers with a common facade, independent of Moqui.
 //!
-//! Each protocol is a backend implementing [`DeviceFacade`] (MQTT, OPC UA, Modbus TCP), each behind its Cargo feature.
-//! [`DeviceGatewayFacade`] is the registry of their connections and subscriptions and gives them one API:
-//! execute a read, write, subscription or unsubscription, with continuous samples delivered to a [`SampleSink`].
+//! Each protocol is a backend implementing [`DeviceFacade`] (Modbus TCP, OPC UA, MQTT, EtherNet/IP, EtherCAT), each
+//! behind its Cargo feature. [`DeviceGatewayFacade`] is the registry of their connections, subscriptions and polling
+//! tasks and gives them one API: execute a read, write, poll, subscription or unsubscription, with continuous samples
+//! delivered to a [`SampleSink`].
 //! Any Rust host creates one with a Tokio runtime. Under the `moqui` feature, [`DeviceGatewayToolFactory`] holds one
 //! for MR-Moqui, and `binding` implements the service run#DeviceGatewayRequest (service/moqui/device/gateway), as
 //! moqui-plc4j's run#Plc4jRequest did; the persistence and notifications are those of moqui-device.

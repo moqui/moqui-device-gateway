@@ -94,7 +94,7 @@ fn process_data_is_little_endian_and_bits_leave_their_neighbours() {
     );
 }
 
-/// An interface that cannot be opened is an error, and the next request tries again.
+/// An interface that cannot be opened is an error, and the next requests get it without opening the interface again.
 #[tokio::test]
 async fn an_interface_that_cannot_be_opened_fails_each_request() {
     let f = Arc::new(DeviceGatewayFacade::new());
@@ -110,6 +110,26 @@ async fn an_interface_that_cannot_be_opened_fails_each_request() {
             .unwrap_err();
         assert_eq!(error.kind, ErrorKind::Transport, "{}", error.message);
         assert!(error.message.contains("no-such-nic0"), "{}", error.message);
+    }
+    f.close().await;
+}
+
+/// A cycle time that is not a number of microseconds in range is refused before anything is opened.
+#[tokio::test]
+async fn an_invalid_cycle_time_is_refused() {
+    let f = Arc::new(DeviceGatewayFacade::new());
+    for cycle in ["abc", "100", "2000000"] {
+        let mut r = common::request(Protocol::EtherCat, "ethercat://no-such-nic1".into(), Operation::Read);
+        r.items[0].address = "input:0:0:UINT".into();
+        r.items[0].physical_type = PhysicalType::U16;
+        r.connection.options.insert("cycle-time-us".into(), cycle.into());
+        let r = Arc::new(r);
+        let mut out = RequestOutput::default();
+        let error = f
+            .execute(r.clone(), &RequestInput::default(), &mut out, r.deadline(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Invalid, "{cycle}: {}", error.message);
     }
     f.close().await;
 }

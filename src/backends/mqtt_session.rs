@@ -49,10 +49,9 @@ pub(super) enum Acker {
 
 impl Acker {
     pub async fn ack(&self, ack: Ack) -> Result<(), DeviceGatewayError> {
-        let failed = || DeviceGatewayError::transport("Cannot queue MQTT acknowledgement");
         match (self, ack) {
-            (Self::V3(c), Ack::V3(p)) => c.ack(&p).await.map_err(|_| failed()),
-            (Self::V5(c), Ack::V5(p)) => c.ack(&p).await.map_err(|_| failed()),
+            (Self::V3(c), Ack::V3(p)) => c.ack(&p).await.map_err(|_| not_queued("acknowledgement")),
+            (Self::V5(c), Ack::V5(p)) => c.ack(&p).await.map_err(|_| not_queued("acknowledgement")),
             _ => Err(DeviceGatewayError::invalid(
                 "MQTT acknowledgement of another protocol version",
             )),
@@ -150,6 +149,27 @@ impl Settings {
             reconnect_delay: Duration::from_millis(delay),
         })
     }
+}
+
+fn qos_v3(qos: u8) -> rumqttc::QoS {
+    match qos {
+        0 => rumqttc::QoS::AtMostOnce,
+        1 => rumqttc::QoS::AtLeastOnce,
+        _ => rumqttc::QoS::ExactlyOnce,
+    }
+}
+
+fn qos_v5(qos: u8) -> v5::mqttbytes::QoS {
+    match qos {
+        0 => v5::mqttbytes::QoS::AtMostOnce,
+        1 => v5::mqttbytes::QoS::AtLeastOnce,
+        _ => v5::mqttbytes::QoS::ExactlyOnce,
+    }
+}
+
+/// The error of a command that the client could not queue: its event loop has ended.
+fn not_queued(what: &str) -> DeviceGatewayError {
+    DeviceGatewayError::transport(format!("Cannot queue MQTT {what}"))
 }
 
 pub(super) fn client_id(r: &PreparedDeviceRequest) -> String {
@@ -265,85 +285,42 @@ impl Session {
     }
 
     pub async fn publish(&mut self, topic: &str, bytes: Vec<u8>, config: &Settings) -> Result<(), DeviceGatewayError> {
-        let failed = |_| DeviceGatewayError::transport("Cannot queue MQTT publication");
         match self {
             Self::V3(c, _) => c
-                .publish(
-                    topic,
-                    match config.qos {
-                        0 => rumqttc::QoS::AtMostOnce,
-                        1 => rumqttc::QoS::AtLeastOnce,
-                        _ => rumqttc::QoS::ExactlyOnce,
-                    },
-                    config.retain,
-                    bytes,
-                )
+                .publish(topic, qos_v3(config.qos), config.retain, bytes)
                 .await
-                .map_err(failed),
+                .map_err(|_| not_queued("publication")),
             Self::V5(c, _) => c
-                .publish(
-                    topic,
-                    match config.qos {
-                        0 => v5::mqttbytes::QoS::AtMostOnce,
-                        1 => v5::mqttbytes::QoS::AtLeastOnce,
-                        _ => v5::mqttbytes::QoS::ExactlyOnce,
-                    },
-                    config.retain,
-                    bytes,
-                )
+                .publish(topic, qos_v5(config.qos), config.retain, bytes)
                 .await
-                .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT publication")),
+                .map_err(|_| not_queued("publication")),
         }
     }
 
     pub async fn subscribe(&mut self, topic: &str, qos: u8) -> Result<(), DeviceGatewayError> {
         match self {
             Self::V3(c, _) => c
-                .subscribe(
-                    topic,
-                    match qos {
-                        0 => rumqttc::QoS::AtMostOnce,
-                        1 => rumqttc::QoS::AtLeastOnce,
-                        _ => rumqttc::QoS::ExactlyOnce,
-                    },
-                )
+                .subscribe(topic, qos_v3(qos))
                 .await
-                .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT subscription")),
+                .map_err(|_| not_queued("subscription")),
             Self::V5(c, _) => c
-                .subscribe(
-                    topic,
-                    match qos {
-                        0 => v5::mqttbytes::QoS::AtMostOnce,
-                        1 => v5::mqttbytes::QoS::AtLeastOnce,
-                        _ => v5::mqttbytes::QoS::ExactlyOnce,
-                    },
-                )
+                .subscribe(topic, qos_v5(qos))
                 .await
-                .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT subscription")),
+                .map_err(|_| not_queued("subscription")),
         }
     }
 
     pub async fn unsubscribe(&mut self, topic: &str) -> Result<(), DeviceGatewayError> {
         match self {
-            Self::V3(c, _) => c
-                .unsubscribe(topic)
-                .await
-                .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT unsubscribe")),
-            Self::V5(c, _) => c
-                .unsubscribe(topic)
-                .await
-                .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT unsubscribe")),
+            Self::V3(c, _) => c.unsubscribe(topic).await.map_err(|_| not_queued("unsubscribe")),
+            Self::V5(c, _) => c.unsubscribe(topic).await.map_err(|_| not_queued("unsubscribe")),
         }
     }
 
     pub async fn disconnect(&mut self) -> Result<(), DeviceGatewayError> {
-        let failed = |_| DeviceGatewayError::transport("Cannot queue MQTT disconnect");
         match self {
-            Self::V3(c, _) => c.disconnect().await.map_err(failed),
-            Self::V5(c, _) => c
-                .disconnect()
-                .await
-                .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT disconnect")),
+            Self::V3(c, _) => c.disconnect().await.map_err(|_| not_queued("disconnect")),
+            Self::V5(c, _) => c.disconnect().await.map_err(|_| not_queued("disconnect")),
         }
     }
 

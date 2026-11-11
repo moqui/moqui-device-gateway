@@ -147,9 +147,17 @@ impl DeviceGatewayFacade {
                     request.connection.protocol
                 )))
             }
-            Operation::Write if !cap.write => return Err(DeviceGatewayError::unsupported("Backend cannot write")),
+            Operation::Write if !cap.write => {
+                return Err(DeviceGatewayError::unsupported(format!(
+                    "{:?} cannot write",
+                    request.connection.protocol
+                )))
+            }
             Operation::Subscribe if !cap.subscribe => {
-                return Err(DeviceGatewayError::unsupported("Backend cannot subscribe"))
+                return Err(DeviceGatewayError::unsupported(format!(
+                    "{:?} cannot subscribe: poll a DrtRead with a pollingInterval",
+                    request.connection.protocol
+                )))
             }
             _ => {}
         }
@@ -170,7 +178,7 @@ impl DeviceGatewayFacade {
                 return Ok(ExecutionOutcome::Unchanged);
             }
             let cancel = CancellationToken::new();
-            let task = if request.operation == Operation::Subscribe && cap.subscribe {
+            let task = if request.operation == Operation::Subscribe {
                 client
                     .subscribe(
                         request.clone(),
@@ -182,8 +190,8 @@ impl DeviceGatewayFacade {
                         deadline,
                     )
                     .await?
-            } else if request.operation == Operation::Poll && cap.read {
-                // Probe before declaring the polling operation active.
+            } else {
+                // One read first: polling is active only once the device answers.
                 let mut probe = RequestOutput::default();
                 self.read_write(&request, input, &mut probe, deadline, client.clone())
                     .await?;
@@ -197,32 +205,42 @@ impl DeviceGatewayFacade {
                         req.polling_interval,
                     );
                     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    // The log tells when polling starts and stops failing, not every failed cycle: a device that is
+                    // off at a short interval would otherwise write many lines a second. Every failure still reaches
+                    // the sink, which notifies the users of a lasting one.
+                    let mut failing = false;
                     loop {
-                        tokio::select! {_ = stop.cancelled()=>break,_ = interval.tick()=>{}}
+                        tokio::select! {
+                            _ = stop.cancelled() => break,
+                            _ = interval.tick() => {}
+                        }
                         let Some(facade) = facade.upgrade() else {
                             break;
                         };
                         let mut out = RequestOutput::default();
-                        match facade
+                        let result = facade
                             .read_write(&req, &RequestInput::default(), &mut out, req.deadline(), client.clone())
-                            .await
-                        {
-                            Ok(()) => {
-                                if let Err(error) = sink.emit(batch(&req, out.items)) {
-                                    tracing::error!(request=%req.name,error=%error,"Field sample was not queued");
-                                }
+                            .await;
+                        let mut polled = batch(&req, out.items);
+                        match result {
+                            Ok(()) if failing => {
+                                failing = false;
+                                tracing::info!(request=%req.name, "Field polling reads again");
                             }
+                            Ok(()) => {}
                             Err(error) => {
-                                tracing::error!(request=%req.name,error=%error,"Field polling failed; acquisition continues");
-                                let mut failed = batch(&req, out.items);
-                                failed.errors.push(error.to_string());
-                                let _ = sink.emit(failed);
+                                if !failing {
+                                    failing = true;
+                                    tracing::error!(request=%req.name, error=%error, "Field polling failed; it goes on at every interval");
+                                }
+                                polled.errors.push(error.to_string());
                             }
+                        }
+                        if let Err(error) = sink.emit(polled) {
+                            tracing::error!(request=%req.name, error=%error, "Field samples were not queued");
                         }
                     }
                 })
-            } else {
-                return Err(DeviceGatewayError::unsupported("Backend cannot subscribe or poll"));
             };
             self.subscriptions.lock().await.insert(
                 request.name.clone(),
@@ -264,10 +282,7 @@ impl DeviceGatewayFacade {
             .await
             .map_err(|_| DeviceGatewayError::timeout(writing))
             .and_then(|result| result);
-        if matches!(
-            request.operation,
-            Operation::Read | Operation::Poll | Operation::Subscribe
-        ) {
+        if request.operation != Operation::Write {
             decode_results(request, &mut output.items);
         }
         if let Err(error) = execution {
@@ -282,7 +297,6 @@ impl DeviceGatewayFacade {
             }
             return Err(error);
         }
-
         Ok(())
     }
     /// The requests with a subscription or polling task: those whose task runs, and those whose task ended without an
@@ -350,7 +364,8 @@ fn decode_results(request: &PreparedDeviceRequest, results: &mut [ItemResult]) {
         }
     }
 }
-fn batch(request: &PreparedDeviceRequest, items: Vec<ItemResult>) -> SampleBatch {
+/// The samples of a read: the values read, and an error for each item that failed.
+fn batch(request: &Arc<PreparedDeviceRequest>, items: Vec<ItemResult>) -> SampleBatch {
     SampleBatch {
         request_name: request.name.clone(),
         errors: items
@@ -365,7 +380,7 @@ fn batch(request: &PreparedDeviceRequest, items: Vec<ItemResult>) -> SampleBatch
             })
             .collect(),
         logging: request.logging,
-        request: Some(Arc::new(request.clone())),
+        request: Some(request.clone()),
         samples: items
             .into_iter()
             .filter(|i| i.status == ItemStatus::Completed)
@@ -383,6 +398,8 @@ fn batch(request: &PreparedDeviceRequest, items: Vec<ItemResult>) -> SampleBatch
             .collect(),
     }
 }
+/// The sink of a subscription: decodes the physical values of the backend to the logical values of the parameters, and
+/// attaches the request to each batch.
 struct DecodedSink {
     request: Arc<PreparedDeviceRequest>,
     inner: Arc<dyn SampleSink>,

@@ -22,6 +22,11 @@
 //! segment (0 is the first), the byte offset in its inputs or outputs, the physical type, little-endian as EtherCAT
 //! sends it. A BOOL addresses one bit: `input:1:0.3:BOOL`. Only outputs are written.
 //!
+//! The cycle is fixed by the request that starts the segment; a request with another `cycle-time-us` is refused. When
+//! the host closes, the SubDevices are taken to SAFE-OP and INIT: the outputs are no longer driven, and each SubDevice
+//! applies its own safe state. A segment that stops on an error (a cable, a SubDevice leaving OP for good) is started
+//! again by a request at least five seconds later.
+//!
 //! The cycle is not hard real-time: it runs in an ordinary thread, and its jitter is that of the operating system.
 //! Opening a raw interface needs the `CAP_NET_RAW` capability (or root) on Linux.
 use crate::{device_facade::DeviceFacade, model::*};
@@ -44,6 +49,10 @@ const MAX_SUBDEVICES: usize = 64;
 const MAX_PDI: usize = 4096;
 const MAX_FRAMES: usize = 16;
 const MAX_PDU_DATA: usize = PduStorage::element_size(1100);
+/// How long a segment that stopped stays stopped before a request starts it again: a request polled at a short
+/// interval must not open the interface many times a second.
+const RESTART_DELAY: Duration = Duration::from_secs(5);
+const DEFAULT_CYCLE_US: u64 = 2000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Area {
@@ -205,15 +214,33 @@ pub fn encode(image: &mut [u8], a: &Address, value: &FieldValue) -> Result<(), D
 struct Image {
     /// Set once the SubDevices are in OP.
     ready: bool,
-    /// Why the segment stopped; it is started again on the next request.
-    failed: Option<String>,
+    /// Why the segment stopped, and when; a request after [`RESTART_DELAY`] starts it again.
+    failed: Option<(String, Instant)>,
     /// False while a SubDevice is not in OP, so its inputs are not current.
     all_op: bool,
     inputs: Vec<Vec<u8>>,
     outputs: Vec<Vec<u8>>,
 }
 
+/// The PDU storage of a segment, owned by its threads and freed once they no longer use it.
+struct Storage(*mut PduStorage<MAX_FRAMES, MAX_PDU_DATA>);
+
+// SAFETY: the storage is shared with ethercrab's TX/RX and loop handles, which are themselves sent between threads;
+// `Storage` only carries the pointer to free it.
+unsafe impl Send for Storage {}
+
+impl Storage {
+    /// # Safety
+    ///
+    /// Nothing may use the storage any more: its loop, TX and RX handles are dropped.
+    unsafe fn free(self) {
+        drop(unsafe { Box::from_raw(self.0) });
+    }
+}
+
 struct Segment {
+    /// The cycle of the process data exchange, fixed when the segment starts.
+    cycle: Duration,
     image: std::sync::Mutex<Image>,
     /// The number of cycles done.
     cycles: watch::Sender<u64>,
@@ -221,31 +248,64 @@ struct Segment {
 }
 
 impl Segment {
-    fn start(interface: String, cycle: Duration) -> Result<Arc<Self>, DeviceGatewayError> {
-        let segment = Arc::new(Self {
+    fn new(cycle: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            cycle,
             image: std::sync::Mutex::new(Image::default()),
             cycles: watch::Sender::new(0),
             stop: AtomicBool::new(false),
-        });
-        // One storage per segment, so that an interface that fails to open can be tried again; a few kilobytes are
-        // left behind for each start.
-        let storage: &'static PduStorage<MAX_FRAMES, MAX_PDU_DATA> = Box::leak(Box::new(PduStorage::new()));
-        let (tx, rx, pdu_loop) = storage
+        })
+    }
+
+    /// A segment that could not start: requests fail with its error until [`RESTART_DELAY`] has passed.
+    fn failed(cycle: Duration, error: &DeviceGatewayError) -> Arc<Self> {
+        let segment = Self::new(cycle);
+        segment.image.lock().unwrap_or_else(|p| p.into_inner()).failed = Some((error.message.clone(), Instant::now()));
+        segment
+    }
+
+    /// Open the interface and start the TX/RX and cycle threads.
+    fn start(interface: String, cycle: Duration) -> Result<Arc<Self>, DeviceGatewayError> {
+        let segment = Self::new(cycle);
+        // Each start has its own PDU storage, as ethercrab splits a storage only once. It is freed when nothing uses
+        // it any more: at once when the interface does not open, or after the cycle and TX/RX threads have ended.
+        let storage = Storage(Box::into_raw(Box::new(PduStorage::new())));
+        // SAFETY: the storage lives until `Storage::free`, which runs only once the loop, TX and RX are dropped.
+        let pdu: &'static PduStorage<MAX_FRAMES, MAX_PDU_DATA> = unsafe { &*storage.0 };
+        let (tx, rx, pdu_loop) = pdu
             .try_split()
             .map_err(|()| DeviceGatewayError::transport("EtherCAT PDU storage is in use"))?;
-        let task = tx_rx_task(&interface, tx, rx).map_err(|e| {
-            DeviceGatewayError::transport(format!(
-                "Cannot open EtherCAT interface {interface} (a raw socket needs CAP_NET_RAW): {e}"
-            ))
-        })?;
-        std::thread::Builder::new()
-            .name(format!("ethercat-io-{interface}"))
-            .spawn(move || {
-                if let Err(e) = futures_lite::future::block_on(task) {
-                    tracing::error!(error=?e, "EtherCAT TX/RX stopped");
+        let task = match tx_rx_task(&interface, tx, rx) {
+            Ok(task) => task,
+            Err(e) => {
+                // End the loop handle's use of the storage before freeing it.
+                {
+                    let _released = pdu_loop;
                 }
-            })
-            .map_err(|e| DeviceGatewayError::transport(format!("Cannot start EtherCAT TX/RX: {e}")))?;
+                // SAFETY: TX and RX were dropped by the failed call, and the loop above.
+                unsafe { storage.free() };
+                return Err(DeviceGatewayError::transport(format!(
+                    "Cannot open EtherCAT interface {interface} (a raw socket needs CAP_NET_RAW): {e}"
+                )));
+            }
+        };
+        let io = match std::thread::Builder::new()
+            .name(format!("ethercat-io-{interface}"))
+            .spawn(move || futures_lite::future::block_on(task))
+        {
+            Ok(io) => io,
+            Err(e) => {
+                // End the loop handle's use of the storage before freeing it.
+                {
+                    let _released = pdu_loop;
+                }
+                // SAFETY: the thread did not start, so its task, with TX and RX, was dropped.
+                unsafe { storage.free() };
+                return Err(DeviceGatewayError::transport(format!(
+                    "Cannot start EtherCAT TX/RX: {e}"
+                )));
+            }
+        };
         let worker = segment.clone();
         std::thread::Builder::new()
             .name(format!("ethercat-cycle-{interface}"))
@@ -256,13 +316,29 @@ impl Segment {
                 if let Err(e) = &result {
                     tracing::error!(interface=%interface, error=%e, "EtherCAT segment stopped");
                 }
-                worker.image.lock().unwrap_or_else(|p| p.into_inner()).failed =
-                    Some(result.err().unwrap_or_else(|| "EtherCAT segment closed".into()));
-                // SAFETY: the group of this MainDevice ended with `run`, and the released PDU loop is dropped, never
-                // used again. Releasing it ends the TX/RX thread.
+                worker.image.lock().unwrap_or_else(|p| p.into_inner()).failed = Some((
+                    result.err().unwrap_or_else(|| "EtherCAT segment closed".into()),
+                    Instant::now(),
+                ));
+                // SAFETY: the group of this MainDevice ended with `run`, and the released loop is dropped, never used
+                // again. Releasing it sets the exit flag, which ends the TX/RX thread.
                 let _ = unsafe { maindevice.release_all() };
+                match io.join() {
+                    Ok(result) => {
+                        if let Err(e) = result {
+                            tracing::error!(interface=%interface, error=?e, "EtherCAT TX/RX stopped with an error");
+                        }
+                        // SAFETY: the TX/RX thread has ended and its TX and RX are dropped with `result`.
+                        unsafe { storage.free() };
+                    }
+                    // A panicked TX/RX thread may have left its TX or RX alive: keep the storage.
+                    Err(_) => tracing::error!(interface=%interface, "EtherCAT TX/RX thread panicked"),
+                }
             })
-            .map_err(|e| DeviceGatewayError::transport(format!("Cannot start the EtherCAT cycle: {e}")))?;
+            .map_err(|e| {
+                // The TX/RX thread runs on, so the storage stays allocated; the process lacks threads anyway.
+                DeviceGatewayError::transport(format!("Cannot start the EtherCAT cycle: {e}"))
+            })?;
         Ok(segment)
     }
 
@@ -334,7 +410,7 @@ impl Segment {
         loop {
             {
                 let image = self.image.lock().unwrap_or_else(|p| p.into_inner());
-                if let Some(failed) = &image.failed {
+                if let Some((failed, _)) = &image.failed {
                     return Err(DeviceGatewayError::transport(failed.clone()));
                 }
                 if image.ready && *cycles.borrow_and_update() > 0 {
@@ -354,7 +430,7 @@ impl Segment {
         let mut cycles = self.cycles.subscribe();
         let target = *cycles.borrow_and_update() + 2;
         while *cycles.borrow_and_update() < target {
-            if let Some(failed) = &self.image.lock().unwrap_or_else(|p| p.into_inner()).failed {
+            if let Some((failed, _)) = &self.image.lock().unwrap_or_else(|p| p.into_inner()).failed {
                 return Err(DeviceGatewayError::transport(failed.clone()).uncertain());
             }
             tokio::time::timeout_at(deadline.into(), cycles.changed())
@@ -408,18 +484,15 @@ impl DeviceFacade for EtherCatDeviceClient {
                 return Err(DeviceGatewayError::unsupported(format!("Unknown EtherCAT option: {k}")));
             }
         }
-        let cycle = r
-            .connection
-            .options
-            .get("cycle-time-us")
-            .map(|s| s.parse::<u64>())
-            .transpose()
-            .ok()
-            .flatten()
-            .unwrap_or(2000);
-        if !(250..=1_000_000).contains(&cycle) {
-            return Err(DeviceGatewayError::invalid("cycle-time-us must be 250..1000000"));
-        }
+        let cycle = match r.connection.options.get("cycle-time-us") {
+            None => DEFAULT_CYCLE_US,
+            Some(text) => text
+                .parse::<u64>()
+                .ok()
+                .filter(|us| (250..=1_000_000).contains(us))
+                .ok_or_else(|| DeviceGatewayError::invalid("cycle-time-us must be 250..1000000"))?,
+        };
+        let cycle = Duration::from_micros(cycle);
         let mut plans = Vec::new();
         for item in &r.items {
             let a = Address::parse(&item.address)?;
@@ -447,19 +520,38 @@ impl DeviceFacade for EtherCatDeviceClient {
         let name = interface(&r.connection.endpoint)?;
         let segment = {
             let mut segments = self.segments.lock().await;
-            let stale = segments
-                .get(&name)
-                .is_some_and(|s| s.image.lock().unwrap_or_else(|p| p.into_inner()).failed.is_some());
-            if stale {
-                segments.remove(&name);
-            }
-            match segments.get(&name) {
-                Some(segment) => segment.clone(),
-                None => {
-                    let segment = Segment::start(name.clone(), Duration::from_micros(cycle))?;
-                    segments.insert(name, segment.clone());
-                    segment
+            let running = match segments.get(&name) {
+                Some(segment) => {
+                    let failed = segment.image.lock().unwrap_or_else(|p| p.into_inner()).failed.clone();
+                    match failed {
+                        Some((failed, at)) if at.elapsed() < RESTART_DELAY => {
+                            return Err(DeviceGatewayError::transport(failed));
+                        }
+                        Some(_) => None,
+                        None if segment.cycle != cycle => {
+                            return Err(DeviceGatewayError::invalid(format!(
+                                "EtherCAT interface {name} already runs at a cycle of {} µs",
+                                segment.cycle.as_micros()
+                            )));
+                        }
+                        None => Some(segment.clone()),
+                    }
                 }
+                None => None,
+            };
+            match running {
+                Some(segment) => segment,
+                None => match Segment::start(name.clone(), cycle) {
+                    Ok(segment) => {
+                        segments.insert(name, segment.clone());
+                        segment
+                    }
+                    Err(error) => {
+                        // Remember the failure, so that the next requests wait before opening the interface again.
+                        segments.insert(name, Segment::failed(cycle, &error));
+                        return Err(error);
+                    }
+                },
             }
         };
         segment.ready(deadline).await?;

@@ -12,7 +12,9 @@
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
-//! MQTT 3.1.1/5 request execution, retained reads and cancellation-aware subscription recovery.
+//! MQTT 3.1.1 and 5 with rumqttc: publications, and subscriptions that survive a broker or network outage. A
+//! durable subscription acknowledges a message only once the host has stored it. A topic is not read: MQTT is
+//! subscribed.
 use super::mqtt_session::{Ack, Acker, Event, Session, Settings};
 use crate::{
     device_facade::{DeviceFacade, Receipt, SampleSink},
@@ -111,12 +113,14 @@ pub(crate) fn matches_topic(filter: &str, topic: &str) -> bool {
     }
 }
 
+/// The values of the items whose topic filter matches the topic of a message.
 fn values(r: &PreparedDeviceRequest, topic_name: &str, bytes: &[u8]) -> Result<Vec<ItemResult>, DeviceGatewayError> {
-    let mut selected = r.clone();
-    selected
+    let selected = r
         .items
-        .retain(|i| topic(r, Some(i)).is_ok_and(|t| matches_topic(&t, topic_name)));
-    payload::read_payload(&selected, bytes)
+        .iter()
+        .filter(|i| topic(r, Some(i)).is_ok_and(|t| matches_topic(&t, topic_name)))
+        .collect::<Vec<_>>();
+    payload::read_items(&selected, bytes)
 }
 
 fn emit(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8], sink: &dyn SampleSink) -> Result<(), DeviceGatewayError> {
@@ -124,14 +128,14 @@ fn emit(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8], sink: &dyn SampleS
 }
 
 /// The batch of one message. A message that does not decode is a batch of its error: stored as a failure, it is
-/// acknowledged and does not block the session.
+/// acknowledged and does not block the session. The facade attaches the request to the batch.
 fn batch_of(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8]) -> SampleBatch {
     if r.plc_log {
         return payload::plc_log_batch(r, bytes).unwrap_or_else(|error| SampleBatch {
             request_name: r.name.clone(),
             errors: vec![error.to_string()],
             logging: true,
-            request: Some(Arc::new(r.clone())),
+            request: None,
             samples: Vec::new(),
         });
     }
@@ -165,7 +169,7 @@ fn batch_of(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8]) -> SampleBatch
         errors,
         request_name: r.name.clone(),
         logging: r.logging,
-        request: Some(Arc::new(r.clone())),
+        request: None,
         samples,
     }
 }
@@ -325,43 +329,43 @@ impl DeviceFacade for MqttDeviceClient {
         out: &mut RequestOutput,
         deadline: Instant,
     ) -> Result<(), DeviceGatewayError> {
-        let config = Settings::parse(r)?;
-        let mut session = Session::new(r, &config)?;
-        if r.operation == Operation::Write {
-            if let Some(bytes) = &input.payload {
-                let topic = topic(r, None)?;
-                publish_topic(&topic)?;
-                return publish(&mut session, &topic, bytes.clone(), &config, deadline).await;
-            }
-            // Validate every command before sending the first one. Never retry a finite write.
-            let plans = r
-                .items
-                .iter()
-                .map(|item| {
-                    let topic = topic(r, Some(item))?;
-                    publish_topic(&topic)?;
-                    Ok((item, topic, payload::write_item_payload(item, input)?))
-                })
-                .collect::<Result<Vec<_>, DeviceGatewayError>>()?;
-            if plans.is_empty() {
-                return Err(DeviceGatewayError::invalid("MQTT write has no items"));
-            }
-            for (item, topic, bytes) in plans {
-                match publish(&mut session, &topic, bytes, &config, deadline).await {
-                    Ok(()) => out.items.push(ItemResult::value(
-                        &item.parameter_id,
-                        input.values[&item.parameter_id].clone(),
-                    )),
-                    Err(error) => {
-                        out.items.push(ItemResult::error(&item.parameter_id, error.clone()));
-                        return Err(error);
-                    }
-                }
-            }
-        } else {
+        if r.operation != Operation::Write {
             return Err(DeviceGatewayError::unsupported(
                 "MQTT has no read: subscribe to the topic (DrtSubscribe or DrtEvent)",
             ));
+        }
+        let config = Settings::parse(r)?;
+        if let Some(bytes) = &input.payload {
+            let topic = topic(r, None)?;
+            publish_topic(&topic)?;
+            let mut session = Session::new(r, &config)?;
+            return publish(&mut session, &topic, bytes.clone(), &config, deadline).await;
+        }
+        // Validate every command before sending the first one. Never retry a finite write.
+        let plans = r
+            .items
+            .iter()
+            .map(|item| {
+                let topic = topic(r, Some(item))?;
+                publish_topic(&topic)?;
+                Ok((item, topic, payload::write_item_payload(item, input)?))
+            })
+            .collect::<Result<Vec<_>, DeviceGatewayError>>()?;
+        if plans.is_empty() {
+            return Err(DeviceGatewayError::invalid("MQTT write has no items"));
+        }
+        let mut session = Session::new(r, &config)?;
+        for (item, topic, bytes) in plans {
+            match publish(&mut session, &topic, bytes, &config, deadline).await {
+                Ok(()) => out.items.push(ItemResult::value(
+                    &item.parameter_id,
+                    input.values[&item.parameter_id].clone(),
+                )),
+                Err(error) => {
+                    out.items.push(ItemResult::error(&item.parameter_id, error.clone()));
+                    return Err(error);
+                }
+            }
         }
         Ok(())
     }
